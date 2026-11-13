@@ -7,6 +7,7 @@ struct ChartView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ChartCanvas {
         let v = ChartCanvas()
+        state.chartCanvas = v
         configure(v)
         return v
     }

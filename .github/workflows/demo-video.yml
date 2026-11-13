@@ -1,0 +1,66 @@
+name: Demo video
+
+# Records a scripted walkthrough of the real app on a macOS runner.
+# Runs for commits whose message contains [video], or manually.
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+jobs:
+  video:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[video]')
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16.4.app /Applications/Xcode_16.3.app /Applications/Xcode.app 2>/dev/null | head -1)
+          sudo xcode-select -s "$XCODE"
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
+
+      - name: Build Grip.app
+        run: |
+          chmod +x scripts/build-app.sh
+          ./scripts/build-app.sh 0.2.0
+
+      - name: Prepare screen
+        run: |
+          defaults write com.apple.dock autohide -bool true
+          defaults write com.apple.dock autohide-delay -float 1000
+          killall Dock || true
+          system_profiler SPDisplaysDataType | grep -iE "resolution|display" || true
+
+      - name: Record demo
+        run: |
+          mkdir -p video
+          ditto -x -k dist/Grip-0.2.0.zip video/app
+          python3 -c 'import time; print(time.time())' > video/record-start.txt
+          screencapture -x -V 130 video/demo.mov &
+          REC=$!
+          sleep 2
+          open video/app/Grip.app --args -GripDemoVideo YES -GripSkipOnboarding YES
+          for i in $(seq 1 140); do sleep 1; pgrep -x Grip >/dev/null || break; done
+          echo "Grip exited after ~${i}s"
+          wait $REC || true
+          cp /tmp/grip-demo-log.json video/ 2>/dev/null || find /var/folders -name grip-demo-log.json -exec cp {} video/ \; 2>/dev/null || true
+          ls -la video
+          test -s video/demo.mov
+
+      - name: Upload video
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-video
+          path: |
+            video/demo.mov
+            video/grip-demo-log.json
+            video/record-start.txt
+          retention-days: 14

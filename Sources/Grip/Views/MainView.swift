@@ -51,14 +51,18 @@ struct NetworkBadge: View {
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(state.streamConnected ? Theme.green : Theme.orange).frame(width: 7, height: 7)
-            Text(state.network == .mainnet ? "MAINNET" : "TESTNET")
+            Text(state.paperMode ? "OEFENEN" : (state.network == .mainnet ? "MAINNET" : "TESTNET"))
                 .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(state.network == .mainnet ? Theme.red : Theme.orange)
+                .foregroundStyle(badgeColor)
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 6).fill((state.network == .mainnet ? Theme.red : Theme.orange).opacity(0.12)))
+        .background(RoundedRectangle(cornerRadius: 6).fill(badgeColor.opacity(0.14)))
         .help(state.streamConnected ? "Live verbonden met Hyperliquid \(state.network.label)" : "Verbinden…")
     }
+}
+
+extension NetworkBadge {
+    var badgeColor: Color { state.paperMode ? Theme.accent : (state.network == .mainnet ? Theme.red : Theme.orange) }
 }
 
 struct CoinPicker: View {
@@ -183,6 +187,7 @@ struct ChartHeader: View {
                             .foregroundStyle(state.timeframe == tf ? Theme.text : Theme.muted)
                     }
                     .buttonStyle(.plain)
+                    .demoAnchor("tf-\(tf.rawValue)")
                 }
             }
             .padding(3)
@@ -195,6 +200,7 @@ struct ChartHeader: View {
                 ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: "Trendlijn (⌥T). Houd ⌘ ingedrukt om te snappen op open/high/low/close.") {
                     state.tool = state.tool == .trendline ? .cursor : .trendline
                 }
+                .demoAnchor("tool-trend")
                 if !state.coinTrendlines.isEmpty {
                     Menu {
                         Button("Wis alle trendlijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }

@@ -20,6 +20,23 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Oefenmodus (papier-traden)", isOn: $state.paperMode)
+                if state.paperMode {
+                    LabeledContent("Startsaldo") { Text(state.fmt.usd(state.paperStartingBalance)) }
+                    HStack {
+                        Text("Reset naar")
+                        ForEach([1_000.0, 10_000.0, 100_000.0], id: \.self) { b in
+                            Button("$" + Fmt.number(b, decimals: 0)) { state.resetPaper(balance: b) }
+                        }
+                    }
+                }
+            } header: {
+                Text("Oefenmodus")
+            } footer: {
+                Text("Handel met nepgeld tegen live koersen van Hyperliquid. Orders, fills, fees, historie en portfolio worden lokaal gesimuleerd. Geen wallet of sleutels nodig.")
+            }
+
+            Section {
                 TextField("Wallet-adres (0x…)", text: $state.accountAddress)
                     .font(.system(.body, design: .monospaced))
                 if !state.accountAddress.isEmpty && !state.hasAccount {
@@ -77,7 +94,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 640)
+        .frame(width: 520, height: 720)
     }
 }
 
@@ -104,6 +121,7 @@ struct OnboardingView: View {
                 .font(.system(size: 12)).foregroundStyle(Theme.dim)
             HStack {
                 Button("Later") { dismiss() }
+                Button("Probeer de oefenmodus") { state.paperMode = true; dismiss() }
                 Spacer()
                 SettingsLink { Text("Instellingen openen") }
                     .buttonStyle(.borderedProminent)

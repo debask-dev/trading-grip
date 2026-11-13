@@ -61,9 +61,13 @@ struct RiskCard: View {
                 ForEach([0.25, 0.5, 1.0, 2.0], id: \.self) { v in
                     Button(Fmt.number(v, decimals: v < 1 ? 2 : 0) + "%") { state.riskPercent = v }
                         .buttonStyle(ChipStyle(active: abs(state.riskPercent - v) < 0.001))
+                        .demoAnchor("risk-\(v)")
                 }
             }
-            if state.isExampleEquity {
+            if state.paperMode {
+                Text("Oefenmodus – live koersen, gesimuleerde orders. Uitzetten in Instellingen.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.accent)
+            } else if state.isExampleEquity {
                 Text("Voorbeeld met $10.000 – koppel je account in Instellingen voor je echte saldo.")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
             }
@@ -79,6 +83,7 @@ struct NewTradeButtons: View {
                 Button { state.newTicket(long: true) } label: { Label("Long", systemImage: "arrow.up.right").frame(maxWidth: .infinity) }
                     .buttonStyle(BigButtonStyle(color: Theme.green))
                     .help("Nieuwe long (⌥L)")
+                    .demoAnchor("btn-long")
                 Button { state.newTicket(long: false) } label: { Label("Short", systemImage: "arrow.down.right").frame(maxWidth: .infinity) }
                     .buttonStyle(BigButtonStyle(color: Theme.red))
                     .help("Nieuwe short (⌥S)")
@@ -101,6 +106,7 @@ struct TicketCard: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .demoAnchor("ticket-type")
 
             VStack(spacing: 8) {
                 if state.ticket?.isMarket == false {
@@ -148,6 +154,7 @@ struct TicketCard: View {
                 }
                 .buttonStyle(BigButtonStyle(color: (r?.isLong ?? true) ? Theme.green : Theme.red))
                 .disabled(r == nil || state.busy || (r?.size ?? 0) <= 0)
+                .demoAnchor("btn-place")
                 .keyboardShortcut(.return, modifiers: .command)
             }
             if !state.canTrade {
@@ -208,6 +215,7 @@ struct PositionCard: View {
                         Button("\(Int(f * 100))%") { Task { await state.closePosition(fraction: f) } }
                             .buttonStyle(ChipStyle(active: false, large: true))
                             .disabled(state.busy)
+                            .demoAnchor("close-\(f)")
                     }
                 }
 

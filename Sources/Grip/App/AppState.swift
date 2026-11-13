@@ -70,6 +70,16 @@ final class AppState: ObservableObject {
     @Published var useCrossMargin: Bool { didSet { defaults.set(useCrossMargin, forKey: "useCrossMargin") } }
     @Published var hideAmounts: Bool { didSet { defaults.set(hideAmounts, forKey: "hideAmounts") } }
     @Published private(set) var agentAddress: String?
+    /// Oefenmodus: live prices, simulated orders and balance (no keys needed).
+    @Published var paperMode: Bool {
+        didSet {
+            guard oldValue != paperMode else { return }
+            if !isDemoVideo { defaults.set(paperMode, forKey: "paperMode") }
+            modeChanged()
+        }
+    }
+    /// True when launched with -GripDemoVideo YES (scripted screen recording).
+    let isDemoVideo: Bool
 
     // MARK: Market
     @Published var assets: [AssetInfo] = []
@@ -115,6 +125,8 @@ final class AppState: ObservableObject {
     @Published var busy = false
     @Published var showOnboarding = false
     @Published var pendingOrderPrices: [Int64: Double] = [:]
+    weak var chartCanvas: ChartCanvas?
+    private var demo: DemoDirector?
 
     private var client: HLClient
     private var stream: HLStream
@@ -122,6 +134,8 @@ final class AppState: ObservableObject {
     private var accountTimer: Timer?
     private var historyTimer: Timer?
     private var candleRequestID = 0
+    private var paper: PaperExchange
+    private var paperKey: String { isDemoVideo ? "paper-demo" : "paper-\(network.rawValue)" }
 
     init() {
         let net = HLNetwork(rawValue: defaults.string(forKey: "network") ?? "") ?? .testnet
@@ -133,10 +147,22 @@ final class AppState: ObservableObject {
         hideAmounts = defaults.bool(forKey: "hideAmounts")
         coin = defaults.string(forKey: "coin") ?? "BTC"
         timeframe = Timeframe(rawValue: defaults.string(forKey: "timeframe") ?? "") ?? .m15
+        let demo = UserDefaults.standard.bool(forKey: "GripDemoVideo")
+        isDemoVideo = demo
+        paperMode = demo || defaults.bool(forKey: "paperMode")
+        if demo {
+            paper = PaperExchange(balance: 25_000)
+            coin = "BTC"
+            timeframe = .m15
+            riskPercent = 0.5
+            hideAmounts = false
+        } else {
+            paper = JSONStore().load(PaperExchange.self, from: "paper-\(net.rawValue)") ?? PaperExchange(balance: 10_000)
+        }
         client = HLClient(network: net)
         stream = HLStream(network: net)
-        trendlines = store.load([Trendline].self, from: "trendlines") ?? []
-        plans = store.load([TradePlan].self, from: "plans") ?? []
+        trendlines = demo ? [] : (store.load([Trendline].self, from: "trendlines") ?? [])
+        plans = demo ? [] : (store.load([TradePlan].self, from: "plans") ?? [])
         agentAddress = (try? loadSigner())?.address
     }
 
@@ -147,8 +173,9 @@ final class AppState: ObservableObject {
     var price: Double { mids[coin] ?? candles.last?.close ?? 0 }
     var position: Position? { account.position(for: coin) }
     var coinOrders: [OpenOrder] { account.orders(for: coin) }
-    var hasAccount: Bool { EthSigner.isValidAddress(accountAddress) }
-    var canTrade: Bool { hasAccount && agentAddress != nil }
+    var hasAccount: Bool { paperMode || EthSigner.isValidAddress(accountAddress) }
+    var canTrade: Bool { paperMode || (hasAccount && agentAddress != nil) }
+    var paperStartingBalance: Double { paper.startingBalance }
     var szDecimals: Int { asset?.szDecimals ?? 4 }
     var change24h: Double { contexts[coin].map { $0.prevDayPx > 0 ? (price - $0.prevDayPx) / $0.prevDayPx : 0 } ?? 0 }
     var priceTick: Double { HLFormat.tick(for: max(price, 0.0000001), szDecimals: szDecimals) }
@@ -175,6 +202,12 @@ final class AppState: ObservableObject {
         await loadMeta()
         await loadCandles()
         if defaults.bool(forKey: "GripDemoTicket") { newTicket(long: true) }
+        if isDemoVideo {
+            paperChanged()
+            let d = DemoDirector(state: self)
+            demo = d
+            d.run()
+        }
         if hasAccount {
             loadStoredFills()
             await refreshAccount()
@@ -196,7 +229,11 @@ final class AppState: ObservableObject {
             Task { @MainActor in self?.applyCandle(coin: coin, tf: tf, candle: candle) }
         }
         stream.onMids = { [weak self] mids in
-            Task { @MainActor in self?.mids.merge(mids) { _, new in new } }
+            Task { @MainActor in
+                guard let self else { return }
+                self.mids.merge(mids) { _, new in new }
+                if self.paperMode { self.paperTick() }
+            }
         }
         stream.onUserEvent = { [weak self] in
             Task { @MainActor in
@@ -222,6 +259,7 @@ final class AppState: ObservableObject {
         portfolio = [:]
         ticket = nil
         agentAddress = (try? loadSigner())?.address
+        if !isDemoVideo { paper = store.load(PaperExchange.self, from: paperKey) ?? PaperExchange(balance: 10_000) }
         configureStream()
         Task {
             await loadMeta()
@@ -289,6 +327,13 @@ final class AppState: ObservableObject {
     // MARK: Account
 
     func refreshAccount() async {
+        if paperMode {
+            paper.recordSnapshot(marks: marks(), assets: assets, minInterval: isDemoVideo ? 2_000 : 30_000)
+            account = paper.accountState(marks: marks(), assets: assets)
+            portfolio = paper.portfolio()
+            if !isDemoVideo { store.save(paper, to: paperKey) }
+            return
+        }
         guard hasAccount else { return }
         do {
             let state = try await client.accountState(user: accountAddress.trimmingCharacters(in: .whitespaces))
@@ -307,11 +352,13 @@ final class AppState: ObservableObject {
     private var fillsKey: String { "fills-\(network.rawValue)-\(accountAddress.lowercased().trimmingCharacters(in: .whitespaces))" }
 
     private func loadStoredFills() {
+        if paperMode { paperChanged(); return }
         fills = store.load([Fill].self, from: fillsKey) ?? []
         rebuildTrades()
     }
 
     func refreshHistory() async {
+        if paperMode { paperChanged(); return }
         guard hasAccount else { return }
         let user = accountAddress.trimmingCharacters(in: .whitespaces)
         loadingHistory = true
@@ -394,8 +441,7 @@ final class AppState: ObservableObject {
         guard let t = ticket, let a = asset, let r = riskResult else { return }
         guard r.size > 0 else { toast("Positie is te klein.", .error); return }
         guard r.notional >= 10 else { toast("Hyperliquid vereist minimaal $10 per order.", .error); return }
-        guard hasAccount else { toast("Stel eerst je wallet-adres in (Instellingen).", .error); return }
-        guard let signer = signerOrToast() else { return }
+        guard hasAccount else { toast("Stel eerst je wallet-adres in (Instellingen), of zet de oefenmodus aan.", .error); return }
         busy = true
         defer { busy = false }
         do {
@@ -403,7 +449,7 @@ final class AppState: ObservableObject {
             var lev = max(r.leverage, Int((r.notional / (available * 0.95)).rounded(.up)))
             lev = min(max(lev, 1), a.maxLeverage)
             let cross = useCrossMargin && !a.onlyIsolated
-            try await client.exchange(HLActions.updateLeverage(asset: a.index, isCross: cross, leverage: lev), signer: signer)
+            try await execLeverage(a, isCross: cross, leverage: lev)
 
             let isBuy = r.isLong
             let entryPx = t.isMarket ? HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals) : t.entry
@@ -413,12 +459,12 @@ final class AppState: ObservableObject {
                 reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: tp, reduceOnly: true, kind: .trigger(triggerPx: tp, isMarket: true, tpsl: .tp)))
             }
             reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: t.stopLoss, reduceOnly: true, kind: .trigger(triggerPx: t.stopLoss, isMarket: true, tpsl: .sl)))
-            let statuses = try await client.exchange(HLActions.order(reqs, grouping: "normalTpsl"), signer: signer)
+            let statuses = try await execOrders(reqs, grouping: "normalTpsl")
 
             let plan = TradePlan(coin: coin, isLong: isBuy, entry: refEntry, stopLoss: t.stopLoss, takeProfit: t.takeProfit,
                                  riskUsd: r.riskUsd, riskPercent: riskPercent)
             plans.append(plan)
-            store.save(plans, to: "plans")
+            if !isDemoVideo { store.save(plans, to: "plans") }
 
             switch statuses.first {
             case .filled(_, let sz, let avg)?:
@@ -437,17 +483,92 @@ final class AppState: ObservableObject {
 
     // MARK: Orders & position management
 
-    private func signerOrToast() -> EthSigner? {
+    private func requireSigner() throws -> EthSigner {
         do { return try loadSigner() } catch {
-            toast("Voeg eerst je API-wallet toe in Instellingen om te kunnen handelen.", .error)
-            return nil
+            throw HLError.exchange("Voeg eerst je API-wallet toe in Instellingen om te kunnen handelen (of zet de oefenmodus aan).")
         }
+    }
+
+    /// Current prices for paper fills (mids, plus the chart's last close as fallback).
+    private func marks() -> [String: Double] {
+        var m = mids
+        if m[coin] == nil, let c = candles.last?.close { m[coin] = c }
+        return m
+    }
+
+    private func execOrders(_ reqs: [OrderRequest], grouping: String = "na") async throws -> [OrderStatus] {
+        if paperMode {
+            let st = try paper.place(reqs, grouping: grouping, marks: marks())
+            paperChanged()
+            return st
+        }
+        return try await client.exchange(HLActions.order(reqs, grouping: grouping), signer: try requireSigner())
+    }
+
+    private func execModify(oid: Int64, _ req: OrderRequest) async throws {
+        if paperMode { try paper.modify(oid: oid, to: req); paperChanged(); return }
+        try await client.exchange(HLActions.modify(oid: oid, order: req), signer: try requireSigner())
+    }
+
+    private func execCancel(_ a: AssetInfo, oid: Int64) async throws {
+        if paperMode { try paper.cancel(oid: oid); paperChanged(); return }
+        try await client.exchange(HLActions.cancel(asset: a.index, oid: oid), signer: try requireSigner())
+    }
+
+    private func execLeverage(_ a: AssetInfo, isCross: Bool, leverage: Int) async throws {
+        if paperMode { paper.updateLeverage(coin: a.name, isCross: isCross, leverage: leverage); return }
+        try await client.exchange(HLActions.updateLeverage(asset: a.index, isCross: isCross, leverage: leverage), signer: try requireSigner())
+    }
+
+    // MARK: Paper trading
+
+    private func paperChanged() {
+        account = paper.accountState(marks: marks(), assets: assets)
+        fills = paper.fills
+        rebuildTrades()
+        portfolio = paper.portfolio()
+        pendingOrderPrices = [:]
+        if !isDemoVideo { store.save(paper, to: paperKey) }
+    }
+
+    /// Called on every price update in paper mode: fills resting orders that were hit.
+    private func paperTick() {
+        let filled = paper.onPrices(marks())
+        if filled.isEmpty {
+            account = paper.accountState(marks: marks(), assets: assets)
+            return
+        }
+        paperChanged()
+        for f in filled {
+            let pnl = f.closedPnl - f.fee
+            if f.closedPnl != 0 {
+                toast("Gevuld: \(f.dir.lowercased()) \(fmt.size(f.sz, coin: f.coin, decimals: 4)) @ \(Fmt.price(f.px)) · \(fmt.signedUsd(pnl)) gerealiseerd", pnl >= 0 ? .success : .info)
+            } else {
+                toast("Gevuld: \(f.dir.lowercased()) \(fmt.size(f.sz, coin: f.coin, decimals: 4)) @ \(Fmt.price(f.px))", .success)
+            }
+        }
+    }
+
+    func resetPaper(balance: Double) {
+        paper.reset(balance: balance)
+        paperChanged()
+        toast("Oefenaccount gereset naar \(fmt.usd(balance))", .info)
+    }
+
+    private func modeChanged() {
+        account = .empty
+        fills = []
+        closedTrades = []
+        portfolio = [:]
+        ticket = nil
+        pendingOrderPrices = [:]
+        if paperMode { paperChanged() } else { accountChanged() }
+        toast(paperMode ? "Oefenmodus aan: live koersen, gesimuleerde orders." : "Oefenmodus uit: je handelt op je echte account.", .info)
     }
 
     func moveOrder(oid: Int64, to newPrice: Double) async {
         guard let o = account.openOrders.first(where: { $0.oid == oid }),
-              let a = assets.first(where: { $0.name == o.coin }),
-              let signer = signerOrToast() else { pendingOrderPrices[oid] = nil; return }
+              let a = assets.first(where: { $0.name == o.coin }) else { pendingOrderPrices[oid] = nil; return }
         let px = HLFormat.roundPrice(newPrice, szDecimals: a.szDecimals)
         let posSize = abs(account.position(for: o.coin)?.size ?? 0)
         let size = o.size > 0 ? o.size : posSize
@@ -456,7 +577,7 @@ final class AppState: ObservableObject {
             : .limit(tif: "Gtc")
         let req = OrderRequest(asset: a, isBuy: o.isBuy, size: size, limitPx: px, reduceOnly: o.reduceOnly, kind: kind)
         do {
-            try await client.exchange(HLActions.modify(oid: oid, order: req), signer: signer)
+            try await execModify(oid: oid, req)
             toast("\(orderName(o)) verplaatst naar \(Fmt.price(px))", .success)
         } catch {
             pendingOrderPrices[oid] = nil
@@ -467,10 +588,9 @@ final class AppState: ObservableObject {
 
     func cancelOrder(_ oid: Int64) async {
         guard let o = account.openOrders.first(where: { $0.oid == oid }),
-              let a = assets.first(where: { $0.name == o.coin }),
-              let signer = signerOrToast() else { return }
+              let a = assets.first(where: { $0.name == o.coin }) else { return }
         do {
-            try await client.exchange(HLActions.cancel(asset: a.index, oid: oid), signer: signer)
+            try await execCancel(a, oid: oid)
             toast("\(orderName(o)) geannuleerd", .info)
         } catch {
             toast(error.localizedDescription, .error)
@@ -480,7 +600,7 @@ final class AppState: ObservableObject {
 
     /// Market close (IOC with slippage) of a fraction of the position.
     func closePosition(fraction: Double) async {
-        guard let pos = position, let a = asset, let signer = signerOrToast() else { return }
+        guard let pos = position, let a = asset else { return }
         let size = min(abs(pos.size), HLFormat.roundSize(abs(pos.size) * fraction, szDecimals: a.szDecimals))
         guard size > 0 else { toast("Te kleine hoeveelheid om te sluiten.", .error); return }
         let isBuy = !pos.isLong
@@ -488,7 +608,7 @@ final class AppState: ObservableObject {
         busy = true
         defer { busy = false }
         do {
-            let st = try await client.exchange(HLActions.order([OrderRequest(asset: a, isBuy: isBuy, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Ioc"))]), signer: signer)
+            let st = try await execOrders([OrderRequest(asset: a, isBuy: isBuy, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Ioc"))])
             if case .filled(_, let sz, let avg)? = st.first {
                 let pnl = (avg - pos.entryPx) * sz * (pos.isLong ? 1 : -1)
                 toast("\(Int(fraction * 100))% gesloten @ \(Fmt.price(avg)) · \(fmt.signedUsd(pnl)) gerealiseerd", pnl >= 0 ? .success : .info)
@@ -504,12 +624,12 @@ final class AppState: ObservableObject {
 
     /// Reduce-only limit order to close part of the position at a chosen price (from dragging the ✕ handle).
     func closeAtLimit(price target: Double) async {
-        guard let pos = position, let a = asset, let signer = signerOrToast() else { return }
+        guard let pos = position, let a = asset else { return }
         let px = HLFormat.roundPrice(target, szDecimals: a.szDecimals)
         let size = min(abs(pos.size), HLFormat.roundSize(abs(pos.size) * dragCloseFraction, szDecimals: a.szDecimals))
         guard size > 0 else { return }
         do {
-            try await client.exchange(HLActions.order([OrderRequest(asset: a, isBuy: !pos.isLong, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Gtc"))]), signer: signer)
+            _ = try await execOrders([OrderRequest(asset: a, isBuy: !pos.isLong, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Gtc"))])
             toast("Close-order: \(Int(dragCloseFraction * 100))% @ \(Fmt.price(px))", .success)
         } catch {
             toast(error.localizedDescription, .error)
@@ -519,13 +639,13 @@ final class AppState: ObservableObject {
 
     /// Adds a take-profit or stop-loss for the whole position, a short distance from the current price.
     func addPositionTpSl(_ kind: TpSl) async {
-        guard let pos = position, let a = asset, let signer = signerOrToast() else { return }
+        guard let pos = position, let a = asset else { return }
         let up = (kind == .tp) == pos.isLong
         let px = HLFormat.roundPrice(price * (up ? 1.015 : 0.985), szDecimals: a.szDecimals)
         let req = OrderRequest(asset: a, isBuy: !pos.isLong, size: abs(pos.size), limitPx: px, reduceOnly: true,
                                kind: .trigger(triggerPx: px, isMarket: true, tpsl: kind))
         do {
-            try await client.exchange(HLActions.order([req], grouping: "positionTpsl"), signer: signer)
+            _ = try await execOrders([req], grouping: "positionTpsl")
             toast("\(kind == .tp ? "Take-profit" : "Stop-loss") toegevoegd @ \(Fmt.price(px)) – sleep de lijn om aan te passen", .success)
         } catch {
             toast(error.localizedDescription, .error)
@@ -640,7 +760,7 @@ final class AppState: ObservableObject {
         saveTrendlines()
     }
 
-    private func saveTrendlines() { store.save(trendlines, to: "trendlines") }
+    private func saveTrendlines() { if !isDemoVideo { store.save(trendlines, to: "trendlines") } }
 
     // MARK: Toasts
 

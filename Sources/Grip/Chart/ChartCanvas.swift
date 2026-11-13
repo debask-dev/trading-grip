@@ -811,3 +811,45 @@ final class ClosureMenuItem: NSMenuItem {
     @objc private func run() { MainActor.assumeIsolated { handler() } }
 }
 #endif
+
+#if os(macOS)
+// MARK: - Geometry for the scripted demo recording (window coordinates)
+extension ChartCanvas {
+    func demoPoint(price: Double, xFraction: CGFloat) -> CGPoint {
+        computeRange()
+        return convert(CGPoint(x: plot.minX + plot.width * xFraction, y: y(price)), to: nil)
+    }
+
+    func demoLinePoint(_ id: LineID) -> CGPoint? {
+        displayIfNeeded()
+        guard let r = labelRects[id] else { return nil }
+        return convert(CGPoint(x: r.minX + 13, y: r.midY), to: nil)
+    }
+
+    var demoCloseHandle: CGPoint? {
+        displayIfNeeded()
+        return closeHandleRect.map { convert(CGPoint(x: $0.midX, y: $0.midY), to: nil) }
+    }
+
+    /// A candle `k` bars back from the newest one, at its high or low.
+    func demoCandlePoint(fromEnd k: Int, high: Bool) -> CGPoint? {
+        computeRange()
+        let i = candles.count - 1 - k
+        guard i >= 0, i < candles.count else { return nil }
+        let c = candles[i]
+        return convert(CGPoint(x: x(index: Double(i)), y: y(high ? c.high : c.low)), to: nil)
+    }
+
+    /// Index (bars back from newest) of the lowest low / highest high within a window of bars.
+    func demoExtreme(from a: Int, to b: Int, high: Bool) -> Int? {
+        guard !candles.isEmpty else { return nil }
+        let range = max(0, a)...min(candles.count - 1, b)
+        return range.max { l, r in
+            let cl = candles[candles.count - 1 - l], cr = candles[candles.count - 1 - r]
+            return high ? cl.high < cr.high : cl.low > cr.low
+        }
+    }
+
+    var demoPlotWindowRect: CGRect { convert(plot, to: nil) }
+}
+#endif

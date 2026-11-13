@@ -20,6 +20,7 @@
 - **Privacymodus** (⇧⌘H): verbergt alle bedragen en groottes, zodat je veilig een screenshot kunt delen. Percentages en prijzen blijven zichtbaar.
 - **Tradehistorie**: afgeronde trades (van open tot volledig dicht), met entry, exit, netto PnL na fees, rendement, R-multiple en duur. Daarnaast winrate, profit factor en gemiddelde R.
 - **Portfolio**: winst/verlies en accountwaarde in de tijd (24u, week, maand, alles), plus een curve van je cumulatieve gerealiseerde winst.
+- **Oefenmodus**: handel met nepgeld tegen live koersen van Hyperliquid. Orders, fills, fees, historie en portfolio worden lokaal gesimuleerd. Geen wallet of sleutels nodig; aanzetten in Instellingen of in het welkomstscherm.
 - **Veilig**:
   - Grip gebruikt een Hyperliquid **API-wallet**. Die kan handelen maar geen geld opnemen.
   - De key staat alleen in de macOS-sleutelhanger.
