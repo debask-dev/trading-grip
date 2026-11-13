@@ -154,7 +154,7 @@ struct TradeScreen: View {
             }
             Divider().overlay(Theme.line)
             TradePanel()
-                .frame(width: 330)
+                .frame(width: 320)
                 .background(Theme.panel)
         }
     }

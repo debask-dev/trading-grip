@@ -11,7 +11,7 @@ struct GripApp: App {
         Window("Grip", id: "main") {
             MainView()
                 .environmentObject(state)
-                .frame(minWidth: 1100, minHeight: 680)
+                .frame(minWidth: 980, minHeight: 620)
                 .preferredColorScheme(.dark)
         }
         .defaultSize(width: 1440, height: 900)

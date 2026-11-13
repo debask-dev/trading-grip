@@ -55,7 +55,7 @@ struct RiskCard: View {
                 Text("= " + state.fmt.usd(-state.sizingEquity * state.riskPercent / 100) + " max")
                     .mono(12.5).foregroundStyle(Theme.red)
             }
-            Slider(value: $state.riskPercent, in: 0.1...5, step: 0.05)
+            Slider(value: Binding(get: { state.riskPercent }, set: { state.riskPercent = ($0 * 20).rounded() / 20 }), in: 0.1...5)
                 .tint(Theme.accent)
             HStack(spacing: 6) {
                 ForEach([0.25, 0.5, 1.0, 2.0], id: \.self) { v in
