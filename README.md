@@ -4,6 +4,8 @@
 
 ![Grip](Resources/AppIcon.png)
 
+🎬 **Demo:** [docs/Grip-app-demo.mp4](docs/Grip-app-demo.mp4), een opname van de echte app (oefenmodus, live koersen), automatisch gemaakt op een Mac van GitHub Actions.
+
 ## Wat kan Grip
 
 - **Orders slepen in de chart**: entry, stop-loss en take-profit zet je met de muis. Open orders en TP/SL van een positie verplaats je door de lijn te verslepen.
