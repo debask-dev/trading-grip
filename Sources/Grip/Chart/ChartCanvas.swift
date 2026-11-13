@@ -506,7 +506,7 @@ final class ChartCanvas: NSView {
         return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
     }
 
-    private func hitTest(_ p: CGPoint) -> Hover? {
+    private func hitTarget(_ p: CGPoint) -> Hover? {
         if p.x > plot.maxX && p.y < plot.maxY { return .axis }
         if let r = closeHandleRect, r.insetBy(dx: -4, dy: -4).contains(p) { return .closeHandle }
         for (id, r) in labelRects where r.insetBy(dx: -2, dy: -3).contains(p) { return .line(id) }
@@ -571,7 +571,7 @@ final class ChartCanvas: NSView {
     override func mouseMoved(with e: NSEvent) {
         mouse = location(e)
         commandDown = e.modifierFlags.contains(.command)
-        hover = tool == .trendline ? nil : hitTest(mouse!)
+        hover = tool == .trendline ? nil : hitTarget(mouse!)
         updateSnapMarker()
         updateCursor()
         needsDisplay = true
@@ -620,7 +620,7 @@ final class ChartCanvas: NSView {
             return
         }
 
-        switch hitTest(p) {
+        switch hitTarget(p) {
         case .closeHandle?:
             drag = .close
             closeGhost = lines.first { $0.id == .position }?.price
@@ -711,7 +711,7 @@ final class ChartCanvas: NSView {
         closeGhost = nil
         trendDraft = nil
         mouse = p
-        hover = tool == .trendline ? nil : hitTest(p)
+        hover = tool == .trendline ? nil : hitTarget(p)
         updateCursor()
         needsDisplay = true
     }
@@ -761,7 +761,7 @@ final class ChartCanvas: NSView {
     override func menu(for event: NSEvent) -> NSMenu? {
         let p = location(event)
         let menu = NSMenu()
-        switch hitTest(p) {
+        switch hitTarget(p) {
         case .trendline(let id)?, .endpoint(let id, _)?:
             guard let l = trendlines.first(where: { $0.id == id }) else { return nil }
             onTrendlineSelect?(id)
@@ -808,6 +808,6 @@ final class ClosureMenuItem: NSMenuItem {
         target = self
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    @objc private func run() { handler() }
+    @objc private func run() { MainActor.assumeIsolated { handler() } }
 }
 #endif
