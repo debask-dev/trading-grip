@@ -56,13 +56,16 @@ final class DemoDirector {
         caption("Trendlijnen tekenen · houd ⌘ ingedrukt = snap op candle en wick")
         try await click(anchor: "tool-trend", fallback: { self.state.tool = .trendline }, done: { self.state.tool == .trendline })
         try await sleep(0.4)
-        if let canvas = state.chartCanvas, let lowA = canvas.demoExtreme(from: 55, to: 80, high: false), let lowB = canvas.demoExtreme(from: 12, to: 35, high: false),
+        let vis = state.chartCanvas?.demoVisibleBars ?? 50
+        if let canvas = state.chartCanvas, let lowA = canvas.demoExtreme(from: vis * 55 / 100, to: vis * 92 / 100, high: false),
+           let lowB = canvas.demoExtreme(from: vis * 8 / 100, to: vis * 40 / 100, high: false),
            let a = canvas.demoCandlePoint(fromEnd: lowA, high: false), let b = canvas.demoCandlePoint(fromEnd: lowB, high: false) {
             try await drawTrendline(from: a, to: b, canvas: canvas)
         }
         try await sleep(0.8)
         try await click(anchor: "tool-trend", fallback: { self.state.tool = .trendline }, done: { self.state.tool == .trendline })
-        if let canvas = state.chartCanvas, let hiA = canvas.demoExtreme(from: 50, to: 80, high: true), let hiB = canvas.demoExtreme(from: 10, to: 40, high: true),
+        if let canvas = state.chartCanvas, let hiA = canvas.demoExtreme(from: vis * 55 / 100, to: vis * 92 / 100, high: true),
+           let hiB = canvas.demoExtreme(from: vis * 8 / 100, to: vis * 40 / 100, high: true),
            let a = canvas.demoCandlePoint(fromEnd: hiA, high: true), let b = canvas.demoCandlePoint(fromEnd: hiB, high: true) {
             try await drawTrendline(from: a, to: b, canvas: canvas)
         }
@@ -136,11 +139,11 @@ final class DemoDirector {
 
         caption("Historie: netto PnL na fees, R-multiple, winrate en meer")
         try await clickTab(1) { self.state.tab = .history }
-        try await sleep(3.8)
+        try await sleep(4.5)
 
         caption("Portfolio: winst/verlies en accountwaarde in de tijd")
         try await clickTab(2) { self.state.tab = .portfolio }
-        try await sleep(3.8)
+        try await sleep(4.5)
 
         try await clickTab(0) { self.state.tab = .trade }
         try await sleep(1.0)

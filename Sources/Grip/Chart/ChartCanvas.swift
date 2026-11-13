@@ -852,6 +852,9 @@ extension ChartCanvas {
 
     var demoPlotWindowRect: CGRect { convert(plot, to: nil) }
 
+    /// Number of bars currently visible left of the newest candle.
+    var demoVisibleBars: Int { max(10, Int(plot.width / spacing - rightOffset) - 2) }
+
     var demoDebug: String {
         "tool=\(tool) drag=\(drag) mouse=\(String(describing: mouse)) plot=\(plot) lines=\(trendlines.count) pending=\(pendingTrendStart != nil) draft=\(trendDraft != nil)"
     }

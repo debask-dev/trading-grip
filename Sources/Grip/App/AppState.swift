@@ -138,7 +138,8 @@ final class AppState: ObservableObject {
     private var paperKey: String { isDemoVideo ? "paper-demo" : "paper-\(network.rawValue)" }
 
     init() {
-        let net = HLNetwork(rawValue: defaults.string(forKey: "network") ?? "") ?? .testnet
+        // The demo recording uses live mainnet prices (read-only) with simulated orders.
+        let net = UserDefaults.standard.bool(forKey: "GripDemoVideo") ? .mainnet : (HLNetwork(rawValue: defaults.string(forKey: "network") ?? "") ?? .testnet)
         network = net
         accountAddress = defaults.string(forKey: "accountAddress") ?? ""
         riskPercent = defaults.object(forKey: "riskPercent") as? Double ?? 1.0
