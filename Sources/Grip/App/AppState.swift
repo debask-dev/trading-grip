@@ -170,9 +170,11 @@ final class AppState: ObservableObject {
         guard !started else { return }
         started = true
         configureStream()
-        if !hasAccount { showOnboarding = true }
+        // Launch arguments for automated screenshots: -GripSkipOnboarding YES -GripDemoTicket YES
+        if !hasAccount && !defaults.bool(forKey: "GripSkipOnboarding") { showOnboarding = true }
         await loadMeta()
         await loadCandles()
+        if defaults.bool(forKey: "GripDemoTicket") { newTicket(long: true) }
         if hasAccount {
             loadStoredFills()
             await refreshAccount()

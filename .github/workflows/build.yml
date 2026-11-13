@@ -49,6 +49,31 @@ jobs:
           path: dist/Grip-${{ env.VERSION }}.zip
           retention-days: 30
 
+      - name: Smoke test (launch + screenshots)
+        run: |
+          mkdir -p smoke && ditto -x -k "dist/Grip-${VERSION}.zip" smoke
+          open smoke/Grip.app --args -GripSkipOnboarding YES -GripDemoTicket YES
+          sleep 30
+          if ! pgrep -x Grip >/dev/null; then
+            echo "::error::Grip is niet blijven draaien na het opstarten"
+            log show --last 2m --predicate 'process == "Grip"' --style compact | tail -50 || true
+            exit 1
+          fi
+          echo "Grip draait."
+          screencapture -x smoke/screen-1.png || echo "screencapture niet beschikbaar"
+          sleep 5
+          screencapture -x smoke/screen-2.png || true
+          osascript -e 'tell application "Grip" to quit' || pkill -x Grip || true
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ env.VERSION }}
+          path: smoke/*.png
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Publish release (tags only)
         if: startsWith(github.ref, 'refs/tags/v')
         env:
