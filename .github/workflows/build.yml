@@ -31,7 +31,7 @@ jobs:
           path: .build
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Package.swift') }}
 
-      - name: Tests (core: signing, risk, trades, drawings)
+      - name: "Tests (core: signing, risk, trades, drawings)"
         run: swift test
 
       - name: Build Grip.app
@@ -53,4 +53,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${GITHUB_REF#refs/tags/}" "dist/Grip-${VERSION}.zip" --title "Grip ${VERSION}" --notes "Download Grip-${VERSION}.zip, pak uit en sleep Grip naar Programma's. Eerste keer openen: rechtsklik → Open."
+        run: |
+          gh release create "${GITHUB_REF#refs/tags/}" "dist/Grip-${VERSION}.zip" \
+            --title "Grip ${VERSION}" \
+            --notes "Download Grip-${VERSION}.zip, pak uit en sleep Grip naar Programma's. Eerste keer openen: rechtsklik → Open."
