@@ -851,5 +851,15 @@ extension ChartCanvas {
     }
 
     var demoPlotWindowRect: CGRect { convert(plot, to: nil) }
+
+    var demoDebug: String {
+        "tool=\(tool) drag=\(drag) mouse=\(String(describing: mouse)) plot=\(plot) lines=\(trendlines.count) pending=\(pendingTrendStart != nil) draft=\(trendDraft != nil)"
+    }
+
+    /// Converts a window point to the chart's (time, price), optionally snapped like ⌘-drawing does.
+    func demoChartPoint(window p: CGPoint, snap: Bool) -> ChartPoint {
+        computeRange()
+        return chartPoint(at: convert(p, from: nil), snap: snap)
+    }
 }
 #endif

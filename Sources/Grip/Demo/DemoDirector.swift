@@ -67,6 +67,7 @@ final class DemoDirector {
             try await drawTrendline(from: a, to: b, canvas: canvas)
         }
         try await sleep(1.2)
+        state.tool = .cursor
         state.selectedTrendline = nil
 
         // 3. Risk
@@ -161,6 +162,7 @@ final class DemoDirector {
 
     private func note(_ s: String) {
         log.append(["t": Date().timeIntervalSince(started), "epoch": Date().timeIntervalSince1970, "event": s])
+        writeLog()
     }
 
     private func writeLog() {
@@ -226,9 +228,11 @@ final class DemoDirector {
         try await sleep(0.12)
         overlay?.ripple(at: sp)
         overlay?.pressed = true
+        // Queue the mouse-up first: native controls run their own tracking loop on mouse-down
+        // and would otherwise wait forever for the release.
+        if let u = event(.leftMouseUp, screen: sp) { NSApp.postEvent(u, atStart: false) }
         if let d = event(.leftMouseDown, screen: sp) { window?.sendEvent(d) }
         try await sleep(0.08)
-        if let u = event(.leftMouseUp, screen: sp) { window?.sendEvent(u) }
         overlay?.pressed = false
         try await sleep(0.25)
         if !done() { fallback(); note("fallback used") } else { note("clicked") }
@@ -276,17 +280,27 @@ final class DemoDirector {
         overlay?.keycap = "⌘"
         if let f = flagsEvent(.command) { canvas.flagsChanged(with: f) }
         try await sleep(0.5)
+        let countBefore = state.trendlines.count
+        let snappedA = canvas.demoChartPoint(window: CGPoint(x: a.x + 3, y: a.y + 9), snap: true)
         overlay?.pressed = true
-        if let d = event(.leftMouseDown, screen: sa, flags: .command) { canvas.mouseDown(with: d) }
+        if let d = event(.leftMouseDown, screen: sa, flags: .command) { canvas.mouseDown(with: d) } else { note("no mouseDown event") }
+        note("after mouseDown: \(canvas.demoDebug)")
         try await moveCursor(to: sb, seconds: 1.3) { [weak self] sp in
             guard let self, let e = self.event(.leftMouseDragged, screen: sp, flags: .command) else { return }
             canvas.mouseDragged(with: e)
         }
         try await sleep(0.35)
+        note("before mouseUp: \(canvas.demoDebug)")
         if let u = event(.leftMouseUp, screen: sb, flags: .command) { canvas.mouseUp(with: u) }
         overlay?.pressed = false
         if let f = flagsEvent([]) { canvas.flagsChanged(with: f) }
         overlay?.keycap = nil
+        if state.trendlines.count == countBefore {
+            let snappedB = canvas.demoChartPoint(window: CGPoint(x: b.x - 3, y: b.y + 9), snap: true)
+            state.addTrendline(snappedA, snappedB)
+            state.tool = .cursor
+            note("trendline fallback used")
+        }
         note("trendline drawn, total \(state.trendlines.count)")
     }
 
