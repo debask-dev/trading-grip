@@ -127,10 +127,6 @@ struct StatusStrip: View {
     }
 }
 
-/// Placeholder until the margin budget (step 3) fills it.
-struct MarginBudgetView: View {
-    var body: some View { EmptyView() }
-}
 
 // MARK: - Rows
 

@@ -266,7 +266,7 @@ struct TicketCard: View {
             if let pl {
                 if let before = pl.before, adding { BeforeAfterView(before: before, after: pl.after, plan: pl) }
                 summary(t, pl, reduce: reduce, adding: adding)
-                ForEach(pl.warnings, id: \.self) { w in
+                ForEach(pl.warnings + state.budgetWarnings(pl), id: \.self) { w in
                     Label(w, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11)).foregroundStyle(Theme.orange)
                         .fixedSize(horizontal: false, vertical: true)
@@ -334,7 +334,9 @@ struct TicketCard: View {
             let unit = t.amountUnit
             let base: Double = unit == .margin ? free : (unit == .notional ? free * lev : free * lev / avg)
             let shares: [Double] = [0.1, 0.25, 0.5, 1]
-            let amountPresets: [(String, Double)] = state.isExampleEquity ? [] : shares.map { f in
+            let slotBase: Double = unit == .margin ? state.slotMargin : (unit == .notional ? state.slotMargin * lev : state.slotMargin * lev / avg)
+            let slotPreset: [(String, Double)] = state.budgetActive ? [("1 vak (1/\(state.maxPositions) van je account)", unit == .coin ? HLFormat.roundSize(slotBase, szDecimals: state.szDecimals, down: true) : (slotBase * 100).rounded(.down) / 100)] : []
+            let amountPresets: [(String, Double)] = state.isExampleEquity ? [] : slotPreset + shares.map { f in
                 ("\(Int(f * 100))% van vrije marge", unit == .coin ? HLFormat.roundSize(base * f, szDecimals: state.szDecimals, down: true) : (base * f * 100).rounded(.down) / 100)
             }
             HStack(alignment: .top, spacing: 8) {

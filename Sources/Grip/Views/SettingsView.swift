@@ -10,6 +10,8 @@ struct SettingsView: View {
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
             ChartSettingsView()
                 .tabItem { Label("Chart", systemImage: "chart.bar.xaxis") }
+            RiskSettingsView()
+                .tabItem { Label("Risico", systemImage: "gauge.with.dots.needle.33percent") }
             AlertSettingsView()
                 .tabItem { Label("Meldingen", systemImage: "bell.badge") }
         }

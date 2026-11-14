@@ -328,6 +328,11 @@ final class AppState: ObservableObject {
     @Published var dockTab: Int = 0
     @Published var dockHeight: Double = UserDefaults.standard.object(forKey: "dockHeight") as? Double ?? 220 { didSet { defaults.set(dockHeight, forKey: "dockHeight") } }
 
+    /// Margin budget: room for this many positions at once (1 = off).
+    @Published var maxPositions: Int = UserDefaults.standard.object(forKey: "maxPositions") as? Int ?? 3 { didSet { defaults.set(maxPositions, forKey: "maxPositions") } }
+    /// Max loss of all stops together, in % of the account (0 = off).
+    @Published var maxTotalRiskPct: Double = UserDefaults.standard.object(forKey: "maxTotalRiskPct") as? Double ?? 0 { didSet { defaults.set(maxTotalRiskPct, forKey: "maxTotalRiskPct") } }
+
     /// Chart indicators (volume first). Shown as chips next to the OHLC line.
     @Published var indicators: [IndicatorConfig] = AppState.loadIndicators() { didSet { saveJSON(indicators, "indicators") } }
     @Published var legendCollapsed: Bool = UserDefaults.standard.bool(forKey: "legendCollapsed") { didSet { defaults.set(legendCollapsed, forKey: "legendCollapsed") } }

@@ -25,7 +25,7 @@ extension AppState {
         guard let t = ticket else { return nil }
         let key = PlanKey(ticket: t, riskSizing: t.riskSized, riskPercent: riskPercent, price: price,
                           equity: sizingEquity, free: account.withdrawable, position: position, tpOrders: existingTPOrders.map { "\($0.oid)-\($0.size)" },
-                          fees: [feeRates.taker, feeRates.maker], coin: coin)
+                          fees: [feeRates.taker, feeRates.maker, Double(maxPositions)], coin: coin)
         if key == planCacheKey { return planCache }
         planCacheKey = key
         planCache = plan(for: t, riskSizing: t.riskSized)
@@ -82,6 +82,8 @@ extension AppState {
         if !sizedByRisk { input.sizeOverride = derivedSize(t) }
         input.leverageOverride = t.leverage
         input.availableMargin = isExampleEquity ? nil : account.withdrawable
+        // Budget: a new position fits in one slot (auto leverage goes up instead).
+        if budgetActive && position == nil && !t.reduceOnly { input.availableMargin = min(input.availableMargin ?? slotMargin, slotMargin) }
         input.isCross = position?.isCross ?? (useCrossMargin && !a.onlyIsolated)
         if let pos = position {
             input.existing = ExistingPosition(size: pos.size, entryPx: pos.entryPx, isLong: pos.isLong, leverage: pos.leverage)
