@@ -154,4 +154,24 @@ final class OrderFlowTests: XCTestCase {
         XCTAssertThrowsError(try p2.place([OrderRequest(asset: btc, isBuy: true, size: 0.0004, limitPx: 65_650, reduceOnly: false, kind: .limit(tif: "Ioc"))],
                                           grouping: "na", marks: marks))
     }
+
+    func testSingleLimitEntryWithLinkedStopAndTakeProfit() throws {
+        let p = PaperExchange(balance: 10_000)
+        p.updateLeverage(coin: "BTC", isCross: true, leverage: 3)
+        _ = try p.place([
+            OrderRequest(asset: btc, isBuy: true, size: 0.1, limitPx: 64_800, reduceOnly: false, kind: .limit(tif: "Gtc")),
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 64_300, reduceOnly: true, kind: .trigger(triggerPx: 64_300, isMarket: true, tpsl: .sl)),
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 65_600, reduceOnly: true, kind: .trigger(triggerPx: 65_600, isMarket: false, tpsl: .tp)),
+        ], grouping: "normalTpsl", marks: marks)
+        var m: ManagedTrade? = ManagedTrade(isLong: true, stop: 64_300, lastSize: 0)
+        move(p, to: 64_790)                               // entry fills, stop and TP become active
+        XCTAssertTrue(try keep(p, &m).isEmpty)          // nothing to add: both already there
+        let orders = state(p).orders(for: "BTC")
+        XCTAssertEqual(orders.filter { $0.tpsl == .sl }.count, 1)
+        XCTAssertEqual(orders.filter { $0.tpsl == .tp }.count, 1)
+        move(p, to: 65_610)                               // take-profit
+        try keep(p, &m)
+        XCTAssertNil(state(p).position(for: "BTC"))
+        XCTAssertNil(m)
+    }
 }

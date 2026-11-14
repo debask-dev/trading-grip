@@ -86,8 +86,12 @@ struct Toast: Identifiable, Equatable {
     var kind: Kind
 }
 
+extension Array {
+    subscript(safe i: Int) -> Element? { indices.contains(i) ? self[i] : nil }
+}
+
 enum LineID: Hashable {
-    case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, order(Int64), position, breakEven, liquidation
+    case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, pendingTP(Int), order(Int64), position, breakEven, liquidation
 }
 
 /// A buy/sell marker on the chart.
@@ -202,7 +206,20 @@ final class AppState: ObservableObject {
         }
     }
     @Published var candles: [Candle] = []
+    /// Mid prices for the UI, published at most once a second (Hyperliquid sends all ~200 markets several times a second).
     @Published var mids: [String: Double] = [:]
+    /// Latest mids, unthrottled (paper fills, order prices).
+    var liveMids: [String: Double] = [:]
+    private var midsFlushScheduled = false
+    private var pendingCandle: (coin: String, tf: Timeframe, candle: Candle)?
+    private var candleFlushScheduled = false
+    // Caches so a redraw does not recompute everything
+    var markerCacheKey = ""
+    var markerCache: [ChartMarker] = []
+    var linkCache: [ChartTradeLink] = []
+    var planCacheKey: PlanKey?
+    var planCache: Plan?
+    var reconcileAgain = false
     @Published var streamConnected = false
     @Published var loadingCandles = false
 
@@ -412,13 +429,21 @@ final class AppState: ObservableObject {
 
     private func configureStream() {
         stream.onCandle = { [weak self] coin, tf, candle in
-            Task { @MainActor in self?.applyCandle(coin: coin, tf: tf, candle: candle) }
+            Task { @MainActor in self?.queueCandle(coin: coin, tf: tf, candle: candle) }
         }
         stream.onMids = { [weak self] mids in
             Task { @MainActor in
                 guard let self else { return }
-                self.mids.merge(mids) { _, new in new }
+                self.liveMids.merge(mids) { _, new in new }
                 if self.paperMode { self.paperTick() }
+                if !self.midsFlushScheduled {
+                    self.midsFlushScheduled = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        guard let self else { return }
+                        self.midsFlushScheduled = false
+                        if self.mids != self.liveMids { self.mids = self.liveMids }
+                    }
+                }
             }
         }
         stream.onUserEvent = { [weak self] in
@@ -505,6 +530,18 @@ final class AppState: ObservableObject {
             toast("Kon koersen niet laden: \(error.localizedDescription)", .error)
         }
         loadingCandles = false
+    }
+
+    /// Every trade sends a candle update; draw at most ~8 times a second.
+    private func queueCandle(coin c: String, tf: Timeframe, candle: Candle) {
+        pendingCandle = (c, tf, candle)
+        guard !candleFlushScheduled else { return }
+        candleFlushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            self.candleFlushScheduled = false
+            if let p = self.pendingCandle { self.pendingCandle = nil; self.applyCandle(coin: p.coin, tf: p.tf, candle: p.candle) }
+        }
     }
 
     private func applyCandle(coin c: String, tf: Timeframe, candle: Candle) {
@@ -644,7 +681,7 @@ final class AppState: ObservableObject {
 
     /// Current prices for paper fills (mids, plus the chart's last close as fallback).
     func marks() -> [String: Double] {
-        var m = mids
+        var m = liveMids
         if m[coin] == nil, let c = candles.last?.close { m[coin] = c }
         return m
     }
@@ -852,6 +889,12 @@ final class AppState: ObservableObject {
                 lines.append(ChartLine(id: .ticketLiq, price: pl.estLiquidationPx, color: Palette.red.withAlphaComponent(0.7), dashed: true, draggable: false))
             }
         }
+        // Take-profits that wait for the entry to fill.
+        if let pend = managed[coin]?.tps {
+            for (i, px) in pend.prices.enumerated() {
+                lines.append(ChartLine(id: .pendingTP(i), price: px, color: Palette.green.withAlphaComponent(0.45), dashed: true, draggable: false))
+            }
+        }
         // While adding, the ticket's stop line stands for the position's stop.
         let hideStop = t.map { $0.useStopLoss && !$0.reduceOnly && position != nil } ?? false
         for o in coinOrders where !(hideStop && o.isTrigger && o.tpsl == .sl) {
@@ -894,6 +937,10 @@ final class AppState: ObservableObject {
             return "TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))\(rr)"
         case .ticketLiq:
             return "LIQ ≈ \(Fmt.price(px))"
+        case .pendingTP(let i):
+            let n = managed[coin]?.tps?.prices.count ?? 1
+            let pct = Int(((managed[coin]?.tps?.fractions[safe: i] ?? 1) * 100).rounded())
+            return "TP\(n > 1 ? "\(i + 1)" : "") · \(pct)%  wacht op entry"
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
             if let pos = position, o.reduceOnly || o.isTrigger {
@@ -927,7 +974,7 @@ final class AppState: ObservableObject {
         case .ticketEntry(let i): if ticket?.entries.indices.contains(i) == true { ticket?.entries[i].price = px }
         case .ticketSL: ticket?.stopLoss = px
         case .ticketTP(let i): if ticket?.tps.indices.contains(i) == true { ticket?.tps[i].price = px }
-        case .ticketLiq: break
+        case .ticketLiq, .pendingTP: break
         case .order(let oid):
             pendingOrderPrices[oid] = px
             if ended { Task { await moveOrder(oid: oid, to: px) } }
@@ -1114,7 +1161,19 @@ extension AppState {
     }
 
     /// Markers for the current coin, according to the marker setting.
-    var chartMarkers: [ChartMarker] {
+    /// Markers and trade links only change with new fills or settings: computed once, not on every redraw.
+    private func refreshMarkerCache() {
+        let key = "\(coin)|\(markerDays)|\(hideAmounts)|\(analysis.executions.count)|\(analysis.closed.count)|\(fills.last?.tid ?? 0)|\(analysis.open[coin]?.executions.count ?? 0)"
+        guard key != markerCacheKey else { return }
+        markerCacheKey = key
+        markerCache = computeMarkers()
+        linkCache = computeLinks()
+    }
+
+    var chartMarkers: [ChartMarker] { refreshMarkerCache(); return markerCache }
+    var chartTradeLinks: [ChartTradeLink] { refreshMarkerCache(); return linkCache }
+
+    private func computeMarkers() -> [ChartMarker] {
         guard markerDays != 0 else { return [] }
         let f = fmt
         var execs: [Execution]
@@ -1134,7 +1193,7 @@ extension AppState {
         }
     }
 
-    var chartTradeLinks: [ChartTradeLink] {
+    private func computeLinks() -> [ChartTradeLink] {
         guard markerDays > 0 else { return [] }
         let from = Date().addingTimeInterval(-Double(markerDays) * 86400)
         return analysis.closed.filter { $0.coin == coin && $0.closeTime >= from }.map { t in

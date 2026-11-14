@@ -36,7 +36,7 @@ extension AppState {
         switch id {
         case .ticketEntry(let i): removeTicketEntry(i)
         case .ticketSL: if panelMode == .manual { ticket?.useStopLoss = false }
-        case .ticketLiq: break
+        case .ticketLiq, .pendingTP: break
         case .ticketTP(let i): removeTicketTP(i)
         case .order(let oid):
             Task { await cancelOrder(oid) }

@@ -16,26 +16,33 @@ struct ChartView: NSViewRepresentable {
         configure(v)
     }
 
+    /// Only redraw when something visible changed (SwiftUI calls this on every state change).
     private func configure(_ v: ChartCanvas) {
         let s = state
-        v.resetKey = "\(s.network.rawValue)-\(s.coin)-\(s.timeframe.rawValue)-\(s.chartResetToken)"
-        v.candles = s.candles
-        v.timeframe = s.timeframe
-        v.coin = s.coin
-        v.magnet = s.magnet
-        v.style = s.chartStyle
-        v.newLineAppearance = s.lineAppearance
-        v.markers = s.chartMarkers
-        v.tradeLinks = s.chartTradeLinks
-        v.highlightTradeID = s.highlightTradeID
-        v.focus = s.chartFocus
-        v.lastPrice = s.price
-        v.lines = s.chartLines
-        v.trendlines = s.coinTrendlines
-        v.selectedTrendline = s.selectedTrendline
-        v.tool = s.tool
-        v.hasPosition = s.position != nil
-        v.isLoading = s.loadingCandles
+        var dirty = false
+        func set<T: Equatable>(_ kp: ReferenceWritableKeyPath<ChartCanvas, T>, _ value: T) {
+            if v[keyPath: kp] != value { v[keyPath: kp] = value; dirty = true }
+        }
+        set(\.resetKey, "\(s.network.rawValue)-\(s.coin)-\(s.timeframe.rawValue)-\(s.chartResetToken)")
+        set(\.candles, s.candles)
+        set(\.timeframe, s.timeframe)
+        set(\.coin, s.coin)
+        set(\.magnet, s.magnet)
+        set(\.style, s.chartStyle)
+        set(\.newLineAppearance, s.lineAppearance)
+        set(\.markers, s.chartMarkers)
+        set(\.tradeLinks, s.chartTradeLinks)
+        set(\.highlightTradeID, s.highlightTradeID)
+        set(\.focus, s.chartFocus)
+        set(\.lines, s.chartLines)
+        set(\.trendlines, s.coinTrendlines)
+        set(\.selectedTrendline, s.selectedTrendline)
+        set(\.tool, s.tool)
+        set(\.hasPosition, s.position != nil)
+        set(\.isLoading, s.loadingCandles)
+        if v.lastPrice <= 0 { v.lastPrice = s.price }
+        let labelKey = "\(s.hideAmounts)|\(s.ticket.map { "\($0)" } ?? "")|\(s.position.map { "\($0.size)|\($0.entryPx)" } ?? "")|\(s.riskPercent)|\(s.account.accountValue)"
+        set(\.labelKey, labelKey)
 
         v.labelFor = { id, px in s.lineLabel(id, at: px) }
         v.closeLabelFor = { px in s.closeGhostLabel(at: px) }
@@ -52,7 +59,7 @@ struct ChartView: NSViewRepresentable {
         v.onLineClose = { id in s.lineClosed(id) }
         v.onTradeSelect = { id in s.highlightTradeID = id }
         v.priceMenuItems = { px in s.priceMenu(at: px) }
-        v.needsDisplay = true
+        if dirty { v.needsDisplay = true }
     }
 }
 #endif

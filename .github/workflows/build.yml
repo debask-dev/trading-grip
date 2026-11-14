@@ -61,6 +61,8 @@ jobs:
           fi
           echo "Grip draait."
           sample Grip 2 -file smoke/sample.txt >/dev/null 2>&1 || true
+          for i in 1 2 3 4 5 6 7 8 9 10; do ps -o %cpu= -p $(pgrep -x Grip | head -1) >> smoke/cpu.txt 2>/dev/null; sleep 1; done || true
+          echo "CPU (10 s, %):"; cat smoke/cpu.txt || true
           log show --last 2m --predicate 'process == "Grip"' --style compact > smoke/log.txt 2>&1 || true
           grep -iE "Grip error|fault|crash" smoke/log.txt | tail -20 || true
           screencapture -x smoke/screen-1.png || echo "screencapture niet beschikbaar"

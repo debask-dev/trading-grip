@@ -3,13 +3,33 @@ import SwiftUI
 import AppKit
 import GripCore
 
+/// Everything the order calculation depends on.
+struct PlanKey: Equatable {
+    var ticket: Ticket
+    var riskSizing: Bool
+    var riskPercent: Double
+    var price: Double
+    var equity: Double
+    var free: Double
+    var position: Position?
+    var tpOrders: [String]
+    var fees: [Double]
+    var coin: String
+}
+
 // MARK: - Ticket: building, editing and placing an order (one or more entries, add to / reduce a position)
 
 extension AppState {
-    /// Calculation for the current ticket.
+    /// Calculation for the current ticket (cached: it is asked for by every chart label on every redraw).
     var plan: Plan? {
         guard let t = ticket else { return nil }
-        return plan(for: t, riskSizing: panelMode != .manual)
+        let key = PlanKey(ticket: t, riskSizing: panelMode != .manual, riskPercent: riskPercent, price: t.isMarket ? price : 0,
+                          equity: sizingEquity, free: account.withdrawable, position: position, tpOrders: existingTPOrders.map { "\($0.oid)-\($0.size)" },
+                          fees: [feeRates.taker, feeRates.maker], coin: coin)
+        if key == planCacheKey { return planCache }
+        planCacheKey = key
+        planCache = plan(for: t, riskSizing: key.riskSizing)
+        return planCache
     }
 
     func plan(for t: Ticket, riskSizing: Bool) -> Plan? {
@@ -286,11 +306,21 @@ extension AppState {
             }
 
             let stop = t.useStopLoss ? HLFormat.roundPrice(t.stopLoss, szDecimals: a.szDecimals) : nil
-            // A single fresh entry with a stop goes in one go (entry + stop linked); everything else Grip keeps in line itself.
-            let simple = pos == nil && entryCount == 1 && stop != nil
+            let avg = pl.after.avgEntry
+            let ladder = t.tps.filter { isBuy ? $0.price > avg : $0.price < avg }
+            // A single fresh entry goes in one go with its stop and (one) take-profit linked to it, so you see them
+            // on Hyperliquid straight away. Everything else Grip keeps in line itself after the fills.
+            let attachTP = pos == nil && entryCount == 1 && ladder.count == 1 && pl.size * ladder[0].price >= TradeKeeper.minOrderValue
+            let simple = pos == nil && entryCount == 1 && (stop != nil || attachTP)
             if simple, let stop {
                 reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: pl.size, limitPx: stop, reduceOnly: true,
                                          kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl)))
+            }
+            if simple && attachTP {
+                let tp = HLFormat.roundPrice(ladder[0].price, szDecimals: a.szDecimals)
+                // Trigger with a limit price: rests as a maker order once triggered.
+                reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: pl.size, limitPx: tp, reduceOnly: true,
+                                         kind: .trigger(triggerPx: tp, isMarket: false, tpsl: .tp)))
             }
             let statuses = try await execOrders(reqs, grouping: simple ? "normalTpsl" : "na")
             let rejected = statuses.compactMap { if case .error(let e) = $0 { return e } else { return nil } }
@@ -301,9 +331,7 @@ extension AppState {
             m.lastSize = abs(pos?.size ?? 0)
             if let stop { m.stop = stop }
             for st in statuses.prefix(entryCount) { if case .resting(let oid) = st { m.entryOids.append(oid); orderKinds[oid] = .limit } }
-            let avg = pl.after.avgEntry
-            let ladder = t.tps.filter { isBuy ? $0.price > avg : $0.price < avg }
-            if !ladder.isEmpty {
+            if !ladder.isEmpty && !(simple && attachTP) {
                 let total = max(ladder.reduce(0) { $0 + $1.pct }, 1)
                 // Placed by the keeper at the first fill; when adding, this new ladder replaces the old take-profits.
                 m.tps = PendingTPs(entryOid: 0, isLong: isBuy, prices: ladder.map(\.price), fractions: ladder.map { $0.pct / total })
@@ -333,6 +361,9 @@ extension AppState {
             let filled = statuses.prefix(entryCount).contains { if case .filled = $0 { return true } else { return false } }
             let resting = statuses.prefix(entryCount).filter { if case .resting = $0 { return true } else { return false } }.count
             let side = isBuy ? "long" : "short"
+            if resting > 0, m.tps != nil {
+                toast("Take-profits worden geplaatst zodra je entry gevuld is (zie de lichte lijnen in de chart).", .info)
+            }
             if resting > 0 {
                 let what = pl.isAdd ? "Bijkoop-order\(resting > 1 ? "s" : "")" : (resting > 1 ? "\(resting) entries" : "Limit \(side)")
                 toast("\(what) geplaatst · \(t.leverage ?? pl.leverage)×", .success)
@@ -359,9 +390,17 @@ extension AppState {
     /// Called after every account refresh (live and practice). The keeper (GripCore, tested against the practice
     /// exchange) decides; this executes: resize or place the stop, place or scale take-profits, cancel unfilled entries.
     func reconcileManaged() async {
-        guard !reconciling, !managed.isEmpty else { return }
+        guard !managed.isEmpty else { return }
+        if reconciling { reconcileAgain = true; return }
         reconciling = true
         defer { reconciling = false }
+        repeat {
+            reconcileAgain = false
+            await reconcileOnce()
+        } while reconcileAgain
+    }
+
+    private func reconcileOnce() async {
         for (c, m) in managed {
             guard let a = assets.first(where: { $0.name == c }) else { continue }
             let step = TradeKeeper.step(m, position: account.position(for: c), orders: account.orders(for: c), szDecimals: a.szDecimals)
@@ -432,7 +471,8 @@ extension AppState {
             try throwIfRejected(st)
             toast("\(tps.count) take-profit\(tps.count > 1 ? "s" : "") geplaatst", .success)
         case .resizeTakeProfit(let oid, let size, let px, let isTrigger):
-            let kind: OrderKind = isTrigger ? .trigger(triggerPx: px, isMarket: true, tpsl: .tp) : .limit(tif: "Gtc")
+            let isMarket = account.openOrders.first { $0.oid == oid }?.orderType.lowercased().contains("market") ?? false
+            let kind: OrderKind = isTrigger ? .trigger(triggerPx: px, isMarket: isMarket, tpsl: .tp) : .limit(tif: "Gtc")
             try await execModify(oid: oid, OrderRequest(asset: a, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true, kind: kind))
         }
     }

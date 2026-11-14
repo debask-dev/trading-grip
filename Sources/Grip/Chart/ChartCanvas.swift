@@ -18,6 +18,8 @@ final class ChartCanvas: NSView {
     var timeframe: Timeframe = .m15
     var coin = ""
     var lastPrice: Double = 0
+    /// Changes when line labels would read differently (amounts hidden, ticket, position).
+    var labelKey = ""
     var lines: [ChartLine] = []
     var trendlines: [Trendline] = []
     var selectedTrendline: UUID?
