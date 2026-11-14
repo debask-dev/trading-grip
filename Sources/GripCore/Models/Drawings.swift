@@ -13,7 +13,8 @@ public enum LineDash: String, Codable, CaseIterable, Sendable {
 
 /// Colors offered in the line toolbar (any hex color is allowed).
 public enum LineSwatches {
-    public static let all = ["#F5D547", "#FFB547", "#FF5C6C", "#2FD394", "#5AA2FF", "#7C6CFF", "#E7EBF2", "#8A94A6"]
+    public static let all = ["#D55C26", "#F5D547", "#FFB547", "#FF5C6C", "#2FD394", "#5AA2FF", "#7C6CFF", "#E7EBF2", "#8A94A6"]
+    public static let defaultColor = "#D55C26"
 }
 
 /// Appearance used for newly drawn lines (remembered from the last change in the toolbar).
@@ -24,7 +25,7 @@ public struct LineAppearance: Codable, Equatable, Sendable {
     public var extendLeft: Bool
     public var extendRight: Bool
 
-    public init(color: String = "#F5D547", width: Double = 2, dash: LineDash = .solid, extendLeft: Bool = false, extendRight: Bool = false) {
+    public init(color: String = LineSwatches.defaultColor, width: Double = 2, dash: LineDash = .solid, extendLeft: Bool = false, extendRight: Bool = false) {
         self.color = color; self.width = width; self.dash = dash; self.extendLeft = extendLeft; self.extendRight = extendRight
     }
 }
@@ -41,7 +42,7 @@ public struct Trendline: Codable, Equatable, Identifiable, Sendable {
     public var extendRight: Bool
     public var createdAt: Date
 
-    public init(id: UUID = UUID(), coin: String, a: ChartPoint, b: ChartPoint, color: String = "#F5D547", width: Double = 2,
+    public init(id: UUID = UUID(), coin: String, a: ChartPoint, b: ChartPoint, color: String = LineSwatches.defaultColor, width: Double = 2,
                 dash: LineDash = .solid, extendLeft: Bool = false, extendRight: Bool = false, createdAt: Date = Date()) {
         self.id = id; self.coin = coin; self.a = a; self.b = b; self.color = color; self.width = width; self.dash = dash
         self.extendLeft = extendLeft; self.extendRight = extendRight; self.createdAt = createdAt

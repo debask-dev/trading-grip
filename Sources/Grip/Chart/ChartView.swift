@@ -18,7 +18,7 @@ struct ChartView: NSViewRepresentable {
 
     private func configure(_ v: ChartCanvas) {
         let s = state
-        v.resetKey = "\(s.network.rawValue)-\(s.coin)-\(s.timeframe.rawValue)"
+        v.resetKey = "\(s.network.rawValue)-\(s.coin)-\(s.timeframe.rawValue)-\(s.chartResetToken)"
         v.candles = s.candles
         v.timeframe = s.timeframe
         v.coin = s.coin
@@ -43,6 +43,8 @@ struct ChartView: NSViewRepresentable {
         v.onTrendlineSelect = { id in s.selectedTrendline = id }
         v.onTrendlineDelete = { id in s.deleteTrendline(id) }
         v.onToolFinished = { s.tool = .cursor }
+        v.onHorizontalCreate = { p in s.addHorizontal(p) }
+        v.onTimeframeTyped = { tf in s.timeframe = tf }
         v.needsDisplay = true
     }
 }

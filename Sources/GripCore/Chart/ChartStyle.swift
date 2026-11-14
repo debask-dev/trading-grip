@@ -37,6 +37,14 @@ public struct ChartStyle: Codable, Equatable, Sendable {
     ]
 
     public var presetName: String? { Self.presets.first { $0.style == self }?.name }
+
+    /// Quick colors offered for candles (first one: the orange the user uses in TradingView).
+    public static let swatches = ["#E68538", "#2FD394", "#26A69A", "#089981", "#FF5C6C", "#EF5350", "#F23645", "#5AA2FF", "#E7EBF2", "#5D6676"]
+
+    /// Sets body, border and wick color for rising or falling candles at once.
+    public mutating func setColor(_ hex: String, up: Bool) {
+        if up { upBody = hex; upBorder = hex; upWick = hex } else { downBody = hex; downBorder = hex; downWick = hex }
+    }
 }
 
 public struct RGBA: Equatable, Sendable {

@@ -1,5 +1,6 @@
 #if os(macOS)
 import AppKit
+import QuartzCore
 import GripCore
 
 /// Custom-drawn candlestick chart with draggable order lines, a drag-to-close handle, trendlines and a measure tool.
@@ -39,6 +40,8 @@ final class ChartCanvas: NSView {
     var onTrendlineSelect: (@MainActor (UUID?) -> Void)?
     var onTrendlineDelete: (@MainActor (UUID) -> Void)?
     var onToolFinished: (@MainActor () -> Void)?
+    var onHorizontalCreate: (@MainActor (ChartPoint) -> Void)?
+    var onTimeframeTyped: (@MainActor (Timeframe) -> Void)?
 
     // MARK: Layout
     private let axisWidth: CGFloat = 78
@@ -53,8 +56,20 @@ final class ChartCanvas: NSView {
     private var manualRange: (lo: Double, hi: Double) = (0, 1)
     private var range: (lo: Double, hi: Double) = (0, 1)
     private var kinetic = KineticScroll()
-    private var kineticTimer: Timer?
     private var clockTimer: Timer?
+
+    // Display-synced animation (momentum, smooth mouse-wheel zoom/pan, soft price auto-scale)
+    private var link: CADisplayLink?
+    private var lastFrameTime: CFTimeInterval = 0
+    private var lastDrawTime: CFTimeInterval = 0
+    private var targetRange: (lo: Double, hi: Double) = (0, 1)
+    private var shownRange: (lo: Double, hi: Double)?
+    private var rangeAnimating = false
+    private var fling: (speed: Double, startOffset: Double, began: CFTimeInterval, duration: Double)?
+    private var zoomTarget: (spacing: Double, anchorX: Double, anchorIndex: Double)?
+    private var panRemaining: Double = 0
+    private var typed = ""
+    private var typedClear: Timer?
 
     // MARK: Interaction
     private enum Hover: Equatable {
@@ -121,6 +136,19 @@ final class ChartCanvas: NSView {
 
     private let timeFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "nl_NL"); return f }()
 
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+
+    override var isOpaque: Bool { true }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -134,10 +162,18 @@ final class ChartCanvas: NSView {
         clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.needsDisplay = true }
         }
+        // Take keyboard focus so shortcuts like typing "15⏎" work right away.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let w = self.window else { return }
+            if w.firstResponder == nil || w.firstResponder === w { w.makeFirstResponder(self) }
+        }
     }
 
     func resetView() {
         stopKinetic()
+        zoomTarget = nil
+        panRemaining = 0
+        shownRange = nil
         vp.reset()
         autoScale = true
         drag = .none
@@ -200,9 +236,15 @@ final class ChartCanvas: NSView {
 
     private func visibleIndices() -> ClosedRange<Int>? { vp.visibleRange }
 
+    /// Computes the auto-scale target. While auto-scaling, `draw` eases the shown range towards it.
     private func computeRange() {
         syncViewport()
-        if !autoScale { range = manualRange; return }
+        if !autoScale { range = manualRange; shownRange = manualRange; return }
+        targetRange = autoRange()
+        if shownRange == nil { shownRange = targetRange; range = targetRange }
+    }
+
+    private func autoRange() -> (lo: Double, hi: Double) {
         var lo = Double.greatestFiniteMagnitude, hi = -Double.greatestFiniteMagnitude
         if let vis = visibleIndices() {
             for i in vis { lo = min(lo, candles[i].low); hi = max(hi, candles[i].high) }
@@ -213,8 +255,22 @@ final class ChartCanvas: NSView {
         }
         if hi - lo < hi * 0.0005 { let m = (hi + lo) / 2; lo = m * 0.9995; hi = m * 1.0005 }
         let pad = (hi - lo) * 0.08
-        range = (lo - pad, hi + pad)
-        manualRange = range
+        return (lo - pad, hi + pad)
+    }
+
+    private func easeRange() {
+        guard autoScale, var sr = shownRange else { return }
+        let now = CACurrentMediaTime()
+        let dt = min(0.05, max(0.001, now - lastDrawTime))
+        lastDrawTime = now
+        let a = 1 - exp(-dt / 0.09)
+        sr.lo += (targetRange.lo - sr.lo) * a
+        sr.hi += (targetRange.hi - sr.hi) * a
+        let eps = (targetRange.hi - targetRange.lo) * 0.0004
+        if abs(sr.lo - targetRange.lo) < eps && abs(sr.hi - targetRange.hi) < eps { sr = targetRange; rangeAnimating = false }
+        else { rangeAnimating = true; startAnimating() }
+        shownRange = sr
+        range = sr
     }
 
     private func chartPoint(at p: CGPoint, snap: Bool) -> ChartPoint {
@@ -253,6 +309,7 @@ final class ChartCanvas: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         computeRange()
+        easeRange()
         labelRects = [:]
         closeHandleRect = nil
         Palette.chartBg.setFill()
@@ -272,6 +329,7 @@ final class ChartCanvas: NSView {
         drawCrosshair()
         drawLegend()
         drawAutoButton()
+        drawTyped()
 
         if candles.isEmpty {
             text(isLoading ? "Koersen laden…" : "Geen koersdata", at: CGPoint(x: plot.midX, y: plot.midY), font: .systemFont(ofSize: 14), color: Palette.dim, align: .center)
@@ -426,6 +484,13 @@ final class ChartCanvas: NSView {
             path.setLineDash([5, 4], count: 2, phase: 0)
             color(newLineAppearance.color).setStroke()
             path.stroke()
+        }
+        // Horizontal line tool preview
+        if tool == .horizontal, let m = mouse, plot.contains(m) {
+            let p = chartPoint(at: m, snap: snapActive)
+            let yy = y(p.price)
+            color(newLineAppearance.color).withAlphaComponent(0.8).setStroke()
+            hline(yy, from: plot.minX, to: plot.maxX, width: CGFloat(newLineAppearance.width), dash: [5, 4])
         }
         // Snap marker
         if let s = snapMarker {
@@ -641,6 +706,22 @@ final class ChartCanvas: NSView {
         }
     }
 
+    /// TradingView-style interval entry: type "15" or "4h" and press ⏎.
+    private func drawTyped() {
+        guard !typed.isEmpty else { return }
+        let tf = Timeframe.parse(typed)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 22, weight: .bold)
+        let hint = tf.map { "⏎  \($0.label)" } ?? "onbekend"
+        let w = max((typed as NSString).size(withAttributes: [.font: font]).width + 40, 120)
+        let box = NSRect(x: plot.midX - w / 2, y: plot.midY - 40, width: w, height: 72)
+        Palette.card.withAlphaComponent(0.96).setFill()
+        NSBezierPath(roundedRect: box, xRadius: 10, yRadius: 10).fill()
+        Palette.accent.setStroke()
+        let b = NSBezierPath(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10); b.lineWidth = 1.5; b.stroke()
+        text(typed.uppercased(), at: CGPoint(x: box.midX, y: box.minY + 26), font: font, color: Palette.text, align: .center)
+        text(hint, at: CGPoint(x: box.midX, y: box.minY + 54), font: .systemFont(ofSize: 11.5, weight: .medium), color: tf == nil ? Palette.red : Palette.muted, align: .center)
+    }
+
     private func drawAutoButton() {
         let r = autoButtonRect
         let hot = hover == .autoButton
@@ -729,7 +810,7 @@ final class ChartCanvas: NSView {
 
     private func updateSnapMarker() {
         guard snapActive, let m = mouse, plot.contains(m) else { snapMarker = nil; return }
-        var using = tool == .trendline || pendingTrendStart != nil
+        var using = tool != .cursor || pendingTrendStart != nil
         switch drag {
         case .trendNew, .endpoint, .measure: using = true
         default: break
@@ -739,7 +820,7 @@ final class ChartCanvas: NSView {
     }
 
     private func updateCursor() {
-        if tool == .trendline { NSCursor.crosshair.set(); return }
+        if tool != .cursor { NSCursor.crosshair.set(); return }
         switch hover {
         case .line?, .closeHandle?: NSCursor.openHand.set()
         case .endpoint?, .trendline?, .autoButton?: NSCursor.pointingHand.set()
@@ -752,7 +833,7 @@ final class ChartCanvas: NSView {
     override func mouseMoved(with e: NSEvent) {
         mouse = location(e)
         commandDown = e.modifierFlags.contains(.command)
-        hover = tool == .trendline ? nil : hitTarget(mouse!)
+        hover = tool != .cursor ? nil : hitTarget(mouse!)
         updateSnapMarker()
         updateCursor()
         needsDisplay = true
@@ -775,6 +856,8 @@ final class ChartCanvas: NSView {
     override func mouseDown(with e: NSEvent) {
         window?.makeFirstResponder(self)
         stopKinetic()
+        zoomTarget = nil
+        panRemaining = 0
         let p = location(e)
         mouse = p
         commandDown = e.modifierFlags.contains(.command)
@@ -808,6 +891,14 @@ final class ChartCanvas: NSView {
             }
         }
 
+        if tool == .horizontal {
+            guard plot.contains(p) else { return }
+            onHorizontalCreate?(chartPoint(at: p, snap: snapActive))
+            onToolFinished?()
+            needsDisplay = true
+            return
+        }
+
         if tool == .trendline {
             guard plot.contains(p) else { return }
             let pt = chartPoint(at: p, snap: snapActive)
@@ -827,7 +918,7 @@ final class ChartCanvas: NSView {
         switch hitTarget(p) {
         case .autoButton?:
             autoScale.toggle()
-            if !autoScale { manualRange = range }
+            if !autoScale { manualRange = range } else { shownRange = range }
         case .closeHandle?:
             drag = .close
             closeGhost = lines.first { $0.id == .position }?.price
@@ -936,54 +1027,104 @@ final class ChartCanvas: NSView {
         closeGhost = nil
         trendDraft = nil
         mouse = p
-        hover = tool == .trendline ? nil : hitTarget(p)
+        hover = tool != .cursor ? nil : hitTarget(p)
         updateCursor()
         needsDisplay = true
     }
 
-    // MARK: Momentum
+    // MARK: Animation
 
     private func startKinetic(speed v: Double) {
-        stopKinetic()
-        let start = vp.rightOffset
-        let began = Date()
-        let duration = KineticScroll.duration(speed: v)
-        kineticTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] t in
-            MainActor.assumeIsolated {
-                guard let self else { t.invalidate(); return }
-                let ms = Date().timeIntervalSince(began) * 1000
-                self.vp.rightOffset = start
-                self.vp.pan(pixels: KineticScroll.offset(speed: v, afterMs: min(ms, duration)))
-                self.needsDisplay = true
-                if ms >= duration { self.stopKinetic() }
+        fling = (v, vp.rightOffset, CACurrentMediaTime(), KineticScroll.duration(speed: v))
+        startAnimating()
+    }
+
+    private func stopKinetic() { fling = nil }
+
+    private func startAnimating() {
+        guard link == nil, window != nil else { return }
+        let l = displayLink(target: self, selector: #selector(onFrame(_:)))
+        l.add(to: .main, forMode: .common)
+        link = l
+        lastFrameTime = CACurrentMediaTime()
+    }
+
+    @objc private func onFrame(_ l: CADisplayLink) {
+        let now = CACurrentMediaTime()
+        let dt = min(0.05, max(0.001, now - lastFrameTime))
+        lastFrameTime = now
+        syncViewport()
+        let a = 1 - exp(-dt / 0.07)
+        if let f = fling {
+            let ms = (now - f.began) * 1000
+            vp.rightOffset = f.startOffset
+            vp.pan(pixels: KineticScroll.offset(speed: f.speed, afterMs: min(ms, f.duration)))
+            if ms >= f.duration { fling = nil }
+        }
+        if let z = zoomTarget {
+            let s = vp.barSpacing + (z.spacing - vp.barSpacing) * a
+            if abs(z.spacing - s) < z.spacing * 0.002 {
+                vp.setSpacing(z.spacing, keepingIndex: z.anchorIndex, atX: z.anchorX)
+                zoomTarget = nil
+            } else {
+                vp.setSpacing(s, keepingIndex: z.anchorIndex, atX: z.anchorX)
             }
+        }
+        if panRemaining != 0 {
+            let d = abs(panRemaining) < 0.5 ? panRemaining : panRemaining * a
+            vp.pan(pixels: d)
+            panRemaining -= d
+            if abs(panRemaining) < 0.01 { panRemaining = 0 }
+        }
+        needsDisplay = true
+        if fling == nil && zoomTarget == nil && panRemaining == 0 && !rangeAnimating {
+            link?.invalidate()
+            link = nil
         }
     }
 
-    private func stopKinetic() {
-        kineticTimer?.invalidate()
-        kineticTimer = nil
+    /// Animated zoom (mouse wheel notches, arrow keys) around a fixed point.
+    private func animateZoom(by factor: Double, anchorX: Double) {
+        let base = zoomTarget?.spacing ?? vp.barSpacing
+        let target = min(max(base * factor, ChartViewport.minSpacing), vp.maxSpacing)
+        let ax = min(max(anchorX, 0), vp.width)
+        zoomTarget = (target, ax, vp.index(x: ax))
+        startAnimating()
     }
 
     // MARK: Wheel & pinch
 
     override func scrollWheel(with e: NSEvent) {
-        stopKinetic()
         syncViewport()
-        let precise = e.hasPreciseScrollingDeltas
-        let dx = Double(e.scrollingDeltaX) * (precise ? 1 : 32)
-        let dy = Double(e.scrollingDeltaY) * (precise ? 1 : 32)
-        if abs(dx) > abs(dy) {
-            vp.pan(pixels: dx)
-        } else if e.momentumPhase.isEmpty {
-            // Zoom only while the fingers are on the trackpad, not during the system's momentum phase.
-            vp.zoom(wheelDelta: dy, anchorX: Double(location(e).x - plot.minX))
+        let ax = Double(location(e).x - plot.minX)
+        let dx = Double(e.scrollingDeltaX), dy = Double(e.scrollingDeltaY)
+        if e.hasPreciseScrollingDeltas {
+            // Trackpad / Magic Mouse: follow the fingers directly, including macOS's own momentum,
+            // so a fast swipe glides out naturally instead of stopping dead.
+            stopKinetic()
+            zoomTarget = nil
+            panRemaining = 0
+            if abs(dx) > abs(dy) {
+                vp.pan(pixels: dx)
+            } else if dy != 0 {
+                vp.zoom(factor: min(max(exp(dy * 0.0045), 0.75), 1.33), anchorX: ax)
+            }
+        } else {
+            // Mouse wheel: every notch animates smoothly; quick notches add up.
+            if abs(dx) > abs(dy) {
+                panRemaining += dx * 36
+                startAnimating()
+            } else if dy != 0 {
+                animateZoom(by: pow(1.14, dy), anchorX: ax)
+            }
         }
         needsDisplay = true
     }
 
     override func magnify(with e: NSEvent) {
         syncViewport()
+        stopKinetic()
+        zoomTarget = nil
         vp.pinch(magnification: Double(e.magnification), anchorX: Double(location(e).x - plot.minX))
         needsDisplay = true
     }
@@ -991,14 +1132,41 @@ final class ChartCanvas: NSView {
     // MARK: Keyboard & context menu
 
     override func keyDown(with e: NSEvent) {
+        let plain = e.modifierFlags.intersection([.command, .control, .option]).isEmpty
+        if plain, let ch = e.charactersIgnoringModifiers?.lowercased(), ch.count == 1, "0123456789hdwm".contains(ch), typed.count < 4 {
+            typed += ch
+            typedClear?.invalidate()
+            typedClear = Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated { self?.typed = ""; self?.needsDisplay = true }
+            }
+            needsDisplay = true
+            return
+        }
+        syncViewport()
         switch e.keyCode {
+        case 36, 76: // return, enter
+            guard !typed.isEmpty else { super.keyDown(with: e); return }
+            if let tf = Timeframe.parse(typed) { onTimeframeTyped?(tf) } else { NSSound.beep() }
+            typed = ""
+            needsDisplay = true
+        case 123: // ←  back in time
+            panRemaining += vp.barSpacing * (e.modifierFlags.contains(.shift) ? 10 : 1)
+            startAnimating()
+        case 124: // →
+            panRemaining -= vp.barSpacing * (e.modifierFlags.contains(.shift) ? 10 : 1)
+            startAnimating()
+        case 126: // ↑ zoom in (around the newest candle)
+            animateZoom(by: 1.25, anchorX: vp.x(index: Double(max(candles.count - 1, 0))))
+        case 125: // ↓ zoom out
+            animateZoom(by: 0.8, anchorX: vp.x(index: Double(max(candles.count - 1, 0))))
         case 51, 117: // delete, forward delete
             if let id = selectedTrendline { onTrendlineDelete?(id) } else { super.keyDown(with: e) }
         case 53: // escape
             pendingTrendStart = nil
             trendDraft = nil
+            if !typed.isEmpty { typed = ""; needsDisplay = true; return }
             if case .none = measure {
-                if tool == .trendline { onToolFinished?() } else if selectedTrendline != nil { onTrendlineSelect?(nil) }
+                if tool != .cursor { onToolFinished?() } else if selectedTrendline != nil { onTrendlineSelect?(nil) }
             } else {
                 measure = .none
             }

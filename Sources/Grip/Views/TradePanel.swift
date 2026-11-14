@@ -284,28 +284,53 @@ struct OrdersCard: View {
 struct BigButtonStyle: ButtonStyle {
     var color: Color
     var textColor: Color = Color(nsColor: NSColor(hex: 0x04150E))
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 13.5, weight: .semibold))
-            .foregroundStyle(textColor)
-            .padding(.vertical, 11)
-            .padding(.horizontal, 10)
-            .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(configuration.isPressed ? 0.8 : 1)))
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+    func makeBody(configuration: Configuration) -> some View { BigBody(configuration: configuration, color: color, textColor: textColor) }
+
+    private struct BigBody: View {
+        let configuration: ButtonStyleConfiguration
+        let color: Color
+        let textColor: Color
+        @State private var hovering = false
+        @Environment(\.isEnabled) private var enabled
+        var body: some View {
+            configuration.label
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(textColor)
+                .padding(.vertical, 11)
+                .padding(.horizontal, 10)
+                .background(RoundedRectangle(cornerRadius: 10).fill(color.opacity(configuration.isPressed ? 0.8 : 1)))
+                .brightness(hovering && enabled ? 0.07 : 0)
+                .opacity(enabled ? 1 : 0.5)
+                .scaleEffect(configuration.isPressed ? 0.98 : 1)
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+        }
     }
 }
 
 struct ChipStyle: ButtonStyle {
     var active: Bool
     var large = false
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: large ? 12 : 11, weight: .semibold))
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, large ? 8 : 5)
-            .background(RoundedRectangle(cornerRadius: 7).fill(active ? Theme.accent.opacity(0.35) : Color.white.opacity(configuration.isPressed ? 0.14 : 0.06)))
-            .overlay(RoundedRectangle(cornerRadius: 7).stroke(Theme.line))
-            .foregroundStyle(Theme.text)
+    func makeBody(configuration: Configuration) -> some View { ChipBody(configuration: configuration, active: active, large: large) }
+
+    private struct ChipBody: View {
+        let configuration: ButtonStyleConfiguration
+        let active: Bool
+        let large: Bool
+        @State private var hovering = false
+        var body: some View {
+            configuration.label
+                .font(.system(size: large ? 12 : 11, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, large ? 8 : 5)
+                .background(RoundedRectangle(cornerRadius: 7).fill(active ? Theme.accent.opacity(0.35) : Color.white.opacity(configuration.isPressed ? 0.16 : (hovering ? 0.11 : 0.06))))
+                .overlay(RoundedRectangle(cornerRadius: 7).stroke(hovering ? Theme.muted.opacity(0.5) : Theme.line))
+                .foregroundStyle(Theme.text)
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+        }
     }
 }
 #endif

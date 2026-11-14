@@ -96,6 +96,38 @@ struct KV: View {
     }
 }
 
+/// Button style for small header/toolbar buttons: hover highlight, pressed state and a full-size click area.
+struct HoverButtonStyle: ButtonStyle {
+    var active: Bool
+    var activeFill: Color = Theme.accent.opacity(0.32)
+
+    func makeBody(configuration: Configuration) -> some View {
+        HoverBody(configuration: configuration, active: active, activeFill: activeFill)
+    }
+
+    private struct HoverBody: View {
+        let configuration: ButtonStyleConfiguration
+        let active: Bool
+        let activeFill: Color
+        @State private var hovering = false
+
+        var body: some View {
+            configuration.label
+                .foregroundStyle(active || hovering ? Theme.text : Theme.muted)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(active ? activeFill : Color.white.opacity(configuration.isPressed ? 0.16 : (hovering ? 0.09 : 0)))
+                )
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(hovering && !active ? 0.08 : 0), lineWidth: 1))
+                .scaleEffect(configuration.isPressed ? 0.95 : 1)
+                .contentShape(Rectangle())
+                .onHover { hovering = $0 }
+                .animation(.easeOut(duration: 0.12), value: hovering)
+                .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+        }
+    }
+}
+
 extension View {
     func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> some View {
         font(.system(size: size, weight: weight, design: .monospaced))

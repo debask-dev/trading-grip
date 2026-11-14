@@ -47,12 +47,22 @@ struct GripCommands: Commands {
                 Button("Timeframe \(tf.label)") { state.timeframe = tf }
                     .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
             }
+            Button("Vorige timeframe") { state.stepTimeframe(-1) }
+                .keyboardShortcut("[", modifiers: .command)
+            Button("Volgende timeframe") { state.stepTimeframe(1) }
+                .keyboardShortcut("]", modifiers: .command)
             Divider()
-            Button("Trendlijn tekenen") { state.tool = .trendline }
+            Button(state.tool == .trendline ? "Trendlijn stoppen" : "Trendlijn") { state.toggleTool(.trendline) }
                 .keyboardShortcut("t", modifiers: .option)
-            Button("Geselecteerde trendlijn verwijderen") { state.deleteSelectedTrendline() }
+            Button(state.tool == .horizontal ? "Horizontale lijn stoppen" : "Horizontale lijn") { state.toggleTool(.horizontal) }
+                .keyboardShortcut("h", modifiers: .option)
+            Button(state.magnet ? "Magneet uit" : "Magneet aan") { state.magnet.toggle() }
+                .keyboardShortcut("m", modifiers: .option)
+            Button("Geselecteerde lijn verwijderen") { state.deleteSelectedTrendline() }
                 .disabled(state.selectedTrendline == nil)
             Divider()
+            Button("Chart resetten") { state.resetChart() }
+                .keyboardShortcut("r", modifiers: .option)
             Button("Vernieuwen") { Task { await state.refreshAll() } }
                 .keyboardShortcut("r", modifiers: .command)
         }
@@ -67,6 +77,11 @@ struct GripCommands: Commands {
             Divider()
             Button(state.hideAmounts ? "Bedragen tonen" : "Bedragen verbergen") { state.hideAmounts.toggle() }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
+        }
+
+        CommandGroup(replacing: .help) {
+            Button("Sneltoetsen") { state.showShortcuts = true }
+                .keyboardShortcut("/", modifiers: .command)
         }
 
         CommandGroup(before: .toolbar) {

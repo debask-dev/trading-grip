@@ -32,8 +32,9 @@ struct LineToolbar: View {
                     Button { state.styleSelectedLine { $0.color = hex } } label: {
                         Circle().fill(Color(hex: hex)).frame(width: 16, height: 16)
                             .overlay(Circle().stroke(Color.white, lineWidth: line.color.uppercased() == hex ? 2 : 0))
+                            .frame(width: 22, height: 24)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(HoverButtonStyle(active: false))
                     .demoAnchor("lt-\(hex)")
                 }
                 ColorPicker("", selection: hexBinding({ line.color }, { hex in state.styleSelectedLine { $0.color = hex } }), supportsOpacity: true)
@@ -71,9 +72,9 @@ struct LineToolbar: View {
             }
             divider
             Button { state.deleteSelectedTrendline() } label: {
-                Image(systemName: "trash").font(.system(size: 12)).foregroundStyle(Theme.red).frame(width: 26, height: 24)
+                Image(systemName: "trash").font(.system(size: 12)).frame(width: 26, height: 24)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(HoverButtonStyle(active: false))
             .help("Verwijderen (⌫)")
         }
         .padding(.horizontal, 12)
@@ -87,13 +88,9 @@ struct LineToolbar: View {
 
     private func toggleButton<Label: View>(active: Bool, help: String, @ViewBuilder label: () -> Label, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            label()
-                .frame(width: 26, height: 24)
-                .background(RoundedRectangle(cornerRadius: 5).fill(active ? Theme.accent.opacity(0.35) : .clear))
-                .foregroundStyle(Theme.text)
-                .contentShape(Rectangle())
+            label().frame(width: 26, height: 24)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle(active: active))
         .help(help)
     }
 
@@ -182,11 +179,26 @@ struct ChartSettingsView: View {
     }
 
     private func colorRow(_ title: String, body: WritableKeyPath<ChartStyle, String>, border: WritableKeyPath<ChartStyle, String>, wick: WritableKeyPath<ChartStyle, String>) -> some View {
-        LabeledContent(title) {
-            HStack(spacing: 14) {
-                picker("Body", body)
-                picker("Rand", border)
-                picker("Wick", wick)
+        let up = title == "Stijgend"
+        return VStack(alignment: .leading, spacing: 8) {
+            LabeledContent(title) {
+                HStack(spacing: 14) {
+                    picker("Body", body)
+                    picker("Rand", border)
+                    picker("Wick", wick)
+                }
+            }
+            HStack(spacing: 6) {
+                Text("Snel:").font(.caption).foregroundStyle(Theme.muted)
+                ForEach(ChartStyle.swatches, id: \.self) { hex in
+                    Button { state.chartStyle.setColor(hex, up: up) } label: {
+                        RoundedRectangle(cornerRadius: 4).fill(Color(hex: hex)).frame(width: 18, height: 18)
+                            .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.white, lineWidth: state.chartStyle[keyPath: body] == hex ? 2 : 0))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(HoverButtonStyle(active: false))
+                    .help(hex)
+                }
             }
         }
     }

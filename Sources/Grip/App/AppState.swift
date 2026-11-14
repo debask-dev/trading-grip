@@ -15,7 +15,7 @@ enum MainTab: String, CaseIterable, Identifiable {
     }
 }
 
-enum ChartTool: Equatable { case cursor, trendline }
+enum ChartTool: Equatable { case cursor, trendline, horizontal }
 
 /// The order being prepared on the chart before it is sent.
 struct Ticket: Equatable {
@@ -131,6 +131,8 @@ final class AppState: ObservableObject {
     @Published var showOnboarding = false
     @Published var pendingOrderPrices: [Int64: Double] = [:]
     weak var chartCanvas: ChartCanvas?
+    @Published var chartResetToken = 0
+    @Published var showShortcuts = false
     private var demo: DemoDirector?
 
     private var client: HLClient
@@ -153,7 +155,9 @@ final class AppState: ObservableObject {
         hideAmounts = defaults.bool(forKey: "hideAmounts")
         magnet = defaults.bool(forKey: "magnet")
         chartStyle = Self.loadJSON(ChartStyle.self, "chartStyle") ?? .grip
-        lineAppearance = Self.loadJSON(LineAppearance.self, "lineAppearance") ?? LineAppearance()
+        var appearance = Self.loadJSON(LineAppearance.self, "lineAppearance") ?? LineAppearance()
+        if appearance.color == "#F5D547" { appearance.color = LineSwatches.defaultColor }   // old default → your TradingView color
+        lineAppearance = appearance
         coin = defaults.string(forKey: "coin") ?? "BTC"
         timeframe = Timeframe(rawValue: defaults.string(forKey: "timeframe") ?? "") ?? .m15
         let demo = UserDefaults.standard.bool(forKey: "GripDemoVideo")
@@ -767,6 +771,25 @@ final class AppState: ObservableObject {
         trendlines.removeAll { $0.id == id }
         if selectedTrendline == id { selectedTrendline = nil }
         saveTrendlines()
+    }
+
+    /// Horizontal line across the whole chart at a price.
+    func addHorizontal(_ p: ChartPoint) {
+        var ap = lineAppearance
+        ap.extendLeft = true
+        ap.extendRight = true
+        let line = Trendline(coin: coin, a: p, b: ChartPoint(time: p.time + timeframe.milliseconds, price: p.price), appearance: ap)
+        trendlines.append(line)
+        selectedTrendline = line.id
+        saveTrendlines()
+    }
+
+    func toggleTool(_ t: ChartTool) { tool = tool == t ? .cursor : t }
+
+    func resetChart() { chartResetToken += 1 }
+
+    func stepTimeframe(_ d: Int) {
+        if let tf = d > 0 ? timeframe.next : timeframe.previous { timeframe = tf }
     }
 
     /// Changes the selected line from the toolbar; the new look becomes the default for new lines.

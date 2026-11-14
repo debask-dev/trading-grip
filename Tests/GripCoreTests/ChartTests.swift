@@ -60,6 +60,29 @@ final class ViewportTests: XCTestCase {
         XCTAssertEqual((800 - v.x(index: 499)) / v.barSpacing, (800 - lastX) / s, accuracy: 1e-9)
     }
 
+    func testContinuousZoomFollowsFastGestures() {
+        var v = viewport()
+        let anchor = 500.0
+        let before = v.index(x: anchor)
+        v.zoom(factor: 1.6, anchorX: anchor)              // one fast trackpad event: not capped at 10%
+        XCTAssertEqual(v.barSpacing, ChartViewport.defaultSpacing * 1.6, accuracy: 1e-9)
+        XCTAssertEqual(v.index(x: anchor), before, accuracy: 1e-9)
+        v.setSpacing(4, keepingIndex: before, atX: anchor)  // animated step towards a target
+        XCTAssertEqual(v.index(x: anchor), before, accuracy: 1e-9)
+    }
+
+    func testTypedTimeframes() {
+        XCTAssertEqual(Timeframe.parse("15"), .m15)
+        XCTAssertEqual(Timeframe.parse("60"), .h1)
+        XCTAssertEqual(Timeframe.parse("4H"), .h4)
+        XCTAssertEqual(Timeframe.parse("d"), .d1)
+        XCTAssertEqual(Timeframe.parse("1w"), .w1)
+        XCTAssertNil(Timeframe.parse("7"))
+        XCTAssertEqual(Timeframe.m15.next, .h1)
+        XCTAssertNil(Timeframe.w1.next)
+        XCTAssertEqual(Timeframe.m5.previous, .m1)
+    }
+
     func testKineticFling() {
         var k = KineticScroll()
         for i in 0...6 { k.add(position: Double(i) * 12, timeMs: Double(i) * 10) }   // 1.2 px/ms
@@ -120,6 +143,11 @@ final class StyleTests: XCTestCase {
         XCTAssertEqual(RGBA(hex: "2fd39480")?.hex, "#2FD39480")
         XCTAssertNil(RGBA(hex: "#xyz"))
         XCTAssertEqual(ChartStyle.classic.presetName, "Klassiek")
+        var st = ChartStyle.grip
+        st.setColor("#E68538", up: true)
+        XCTAssertEqual([st.upBody, st.upBorder, st.upWick], ["#E68538", "#E68538", "#E68538"])
+        XCTAssertNil(st.presetName)
+        XCTAssertEqual(LineAppearance().color, "#D55C26")
     }
 
     func testLegacyTrendlineDecoding() throws {

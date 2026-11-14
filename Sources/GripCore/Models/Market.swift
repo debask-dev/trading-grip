@@ -18,6 +18,24 @@ public enum Timeframe: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
+    /// TradingView-style typed interval: "1", "5", "15" (minutes), "60"/"1h", "240"/"4h", "d"/"1d", "w"/"1w".
+    public static func parse(_ raw: String) -> Timeframe? {
+        let s = raw.lowercased().trimmingCharacters(in: .whitespaces)
+        switch s {
+        case "1", "1m": return .m1
+        case "5", "5m": return .m5
+        case "15", "15m": return .m15
+        case "60", "1h", "h": return .h1
+        case "240", "4h": return .h4
+        case "d", "1d", "24h": return .d1
+        case "w", "1w", "7d": return .w1
+        default: return nil
+        }
+    }
+
+    public var next: Timeframe? { Timeframe.allCases.firstIndex(of: self).flatMap { $0 + 1 < Timeframe.allCases.count ? Timeframe.allCases[$0 + 1] : nil } }
+    public var previous: Timeframe? { Timeframe.allCases.firstIndex(of: self).flatMap { $0 > 0 ? Timeframe.allCases[$0 - 1] : nil } }
+
     /// How far back to load on first open (Hyperliquid serves at most 5000 candles).
     public var historyCount: Int { 1500 }
 }

@@ -55,7 +55,13 @@
 |---|---|
 | Nieuwe long / short | ⌥L / ⌥S |
 | Order plaatsen | ⌘↩ |
-| Trendlijn tekenen | ⌥T (magneet, of houd ⌘ voor snap) |
+| Trendlijn / horizontale lijn | ⌥T / ⌥H (nog eens = terug) |
+| Magneet | ⌥M (houd ⌘ voor tijdelijk omzetten) |
+| Timeframe typen | 1 · 5 · 15 · 60 · 4h · D · W + ⏎ |
+| Vorige / volgende timeframe | ⌘[ / ⌘] |
+| Chart verschuiven / zoomen | ← → / ↑ ↓ |
+| Chart resetten | ⌥R |
+| Alle sneltoetsen | ⌘/ |
 | Meten | ⇧ + klik, klik |
 | Timeframe | ⌘1 … ⌘7 |
 | Traden / Historie / Portfolio | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 |

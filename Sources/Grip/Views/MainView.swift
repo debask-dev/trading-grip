@@ -43,6 +43,7 @@ struct MainView: View {
         }
         .overlay(alignment: .top) { ToastStack().padding(.top, 10) }
         .sheet(isPresented: $state.showOnboarding) { OnboardingView() }
+        .sheet(isPresented: $state.showShortcuts) { ShortcutsView() }
         .task { await state.start() }
     }
 }
@@ -181,18 +182,16 @@ struct ChartHeader: View {
             .frame(minWidth: 110, alignment: .leading)
 
             HStack(spacing: 2) {
-                ForEach(Timeframe.allCases) { tf in
+                ForEach(Array(Timeframe.allCases.enumerated()), id: \.element) { i, tf in
                     Button {
                         state.timeframe = tf
                     } label: {
                         Text(tf.label)
                             .font(.system(size: 12, weight: .semibold))
-                            .frame(minWidth: 30)
-                            .padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: 6).fill(state.timeframe == tf ? Theme.card : .clear))
-                            .foregroundStyle(state.timeframe == tf ? Theme.text : Theme.muted)
+                            .frame(minWidth: 32, minHeight: 24)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(HoverButtonStyle(active: state.timeframe == tf, activeFill: Theme.card))
+                    .help("Timeframe \(tf.label) (⌘\(i + 1) · of typ \(typedHint(tf)) + ⏎ in de chart)")
                     .demoAnchor("tf-\(tf.rawValue)")
                 }
             }
@@ -202,45 +201,47 @@ struct ChartHeader: View {
             Divider().frame(height: 22)
 
             HStack(spacing: 4) {
-                ToolButton(icon: "cursorarrow", active: state.tool == .cursor, help: "Aanwijzer") { state.tool = .cursor }
-                ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: "Trendlijn (⌥T). Houd ⌘ ingedrukt om te snappen op open/high/low/close.") {
-                    state.tool = state.tool == .trendline ? .cursor : .trendline
+                ToolButton(icon: "cursorarrow", active: state.tool == .cursor, help: "Aanwijzer (Esc)") { state.tool = .cursor }
+                ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: "Trendlijn (⌥T, nog eens ⌥T = terug)") {
+                    state.toggleTool(.trendline)
                 }
                 .demoAnchor("tool-trend")
+                ToolButton(icon: "minus", active: state.tool == .horizontal, help: "Horizontale lijn (⌥H)") {
+                    state.toggleTool(.horizontal)
+                }
                 ToolButton(icon: NSImage(systemSymbolName: "magnet", accessibilityDescription: nil) != nil ? "magnet" : "scope",
-                           active: state.magnet, help: "Magneet: snap op open/high/low/close van candles (⌘ zet tijdelijk om)") {
+                           active: state.magnet, help: "Magneet: snap op open/high/low/close (⌥M · ⌘ ingedrukt = tijdelijk omzetten)") {
                     state.magnet.toggle()
                 }
                 .demoAnchor("tool-magnet")
                 if !state.coinTrendlines.isEmpty {
                     Menu {
-                        Button("Wis alle trendlijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }
+                        Button("Wis alle lijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }
                     } label: {
                         Image(systemName: "trash").font(.system(size: 12))
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .help("Trendlijnen wissen")
+                    .help("Lijnen wissen")
                 }
             }
 
-            if state.tool == .trendline {
-                Text("Klik en sleep om te tekenen · houd **⌘** ingedrukt om te snappen op candle/wick · Esc = stoppen")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.orange)
-                    .lineLimit(1)
-            } else if state.selectedTrendline != nil {
-                Text("Sleep de uiteinden om aan te passen · ⌫ verwijdert")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.muted)
-                    .lineLimit(1)
-            } else {
-                Text("⇧-klik = meten")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.dim)
-                    .lineLimit(1)
-                    .help("Houd ⇧ ingedrukt en klik in de chart, beweeg de muis en klik nog eens: % omhoog/omlaag, aantal candles en tijd.")
+            Group {
+                switch state.tool {
+                case .trendline:
+                    Text("Klik en sleep om te tekenen · **⌘** = snap aan/uit · Esc = stoppen").foregroundStyle(Theme.orange)
+                case .horizontal:
+                    Text("Klik op een prijs · **⌘** = snap aan/uit · Esc = stoppen").foregroundStyle(Theme.orange)
+                case .cursor:
+                    if state.selectedTrendline != nil {
+                        Text("Sleep de uiteinden om aan te passen · ⌫ verwijdert").foregroundStyle(Theme.muted)
+                    } else {
+                        Text("⇧-klik = meten · ⌘/ = sneltoetsen").foregroundStyle(Theme.dim)
+                    }
+                }
             }
+            .font(.system(size: 11.5))
+            .lineLimit(1)
 
             Spacer()
             if state.loadingCandles { ProgressView().controlSize(.small) }
@@ -248,6 +249,18 @@ struct ChartHeader: View {
         .padding(.horizontal, 14)
         .frame(height: 50)
         .background(Theme.panel)
+    }
+
+    private func typedHint(_ tf: Timeframe) -> String {
+        switch tf {
+        case .m1: return "1"
+        case .m5: return "5"
+        case .m15: return "15"
+        case .h1: return "60"
+        case .h4: return "4h"
+        case .d1: return "D"
+        case .w1: return "W"
+        }
     }
 }
 
@@ -261,11 +274,68 @@ struct ToolButton: View {
             Image(systemName: icon)
                 .font(.system(size: 13, weight: .medium))
                 .frame(width: 30, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6).fill(active ? Theme.accent.opacity(0.3) : .clear))
-                .foregroundStyle(active ? Theme.text : Theme.muted)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(HoverButtonStyle(active: active))
         .help(help)
+    }
+}
+
+/// Sneltoetsen-overzicht (⌘/).
+struct ShortcutsView: View {
+    @Environment(\.dismiss) private var dismiss
+    private let groups: [(String, [(String, String)])] = [
+        ("Chart", [
+            ("⌘1 … ⌘7", "Timeframe 1m … 1w"),
+            ("Typ 1 · 5 · 15 · 60 · 4h · D · W, dan ⏎", "Timeframe kiezen zoals in TradingView"),
+            ("⌘[  /  ⌘]", "Vorige / volgende timeframe"),
+            ("← →  (⇧ = 10 candles)", "Chart verschuiven"),
+            ("↑ ↓", "In- en uitzoomen"),
+            ("⌥R", "Chart resetten (zoom, positie, schaal)"),
+            ("Scrollen · knijpen", "Zoomen rond de cursor"),
+            ("Slepen op tijd-as / prijs-as", "Horizontaal / verticaal schalen"),
+            ("Dubbelklik op een as", "As terugzetten"),
+        ]),
+        ("Tekenen & meten", [
+            ("⌥T", "Trendlijn aan/uit"),
+            ("⌥H", "Horizontale lijn aan/uit"),
+            ("⌥M", "Magneet aan/uit"),
+            ("⌘ ingedrukt", "Snap tijdelijk omzetten"),
+            ("⇧ + klik, klik", "Meten: %, candles, tijd"),
+            ("⌫", "Geselecteerde lijn verwijderen"),
+            ("Esc", "Terug naar aanwijzer / annuleren"),
+        ]),
+        ("Traden", [
+            ("⌥L  /  ⌥S", "Nieuwe long / short"),
+            ("⌘↩", "Order plaatsen"),
+            ("⇧⌘H", "Bedragen verbergen"),
+            ("⌥⌘1 / 2 / 3", "Traden / Historie / Portfolio"),
+            ("⌘R", "Vernieuwen"),
+        ]),
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Text("Sneltoetsen").font(.system(size: 20, weight: .bold))
+                Spacer()
+                Button("Sluiten") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            HStack(alignment: .top, spacing: 28) {
+                ForEach(groups, id: \.0) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(group.0.uppercased()).font(.system(size: 10.5, weight: .semibold)).tracking(0.8).foregroundStyle(Theme.muted)
+                        ForEach(group.1, id: \.0) { item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.0).font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                                Text(item.1).font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+                            }
+                        }
+                    }
+                    .frame(width: 230, alignment: .leading)
+                }
+            }
+        }
+        .padding(26)
     }
 }
 #endif

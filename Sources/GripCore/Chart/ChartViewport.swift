@@ -66,6 +66,21 @@ public struct ChartViewport: Equatable, Sendable {
         clamp()
     }
 
+    /// Sets the bar spacing while keeping bar `idx` at x-position `x` (used for smooth, animated zooming).
+    public mutating func setSpacing(_ s: Double, keepingIndex idx: Double, atX x: Double) {
+        guard barCount > 0 else { barSpacing = min(max(s, Self.minSpacing), maxSpacing); return }
+        barSpacing = min(max(s, Self.minSpacing), maxSpacing)
+        rightOffset = idx - Double(barCount - 1) + (width - barSpacing / 2 - x) / barSpacing
+        clamp()
+    }
+
+    /// Continuous zoom by a factor (trackpad), anchored at `anchorX`. No per-event cap, so fast gestures follow the fingers.
+    public mutating func zoom(factor: Double, anchorX: Double) {
+        guard factor.isFinite, factor > 0 else { return }
+        let a = min(max(anchorX, 0), width)
+        setSpacing(barSpacing * factor, keepingIndex: index(x: a), atX: a)
+    }
+
     /// Pinch zoom (magnification, e.g. 0.05 = 5% larger).
     public mutating func pinch(magnification m: Double, anchorX: Double) {
         let anchor = min(max(anchorX, 0), width)
