@@ -18,7 +18,9 @@ struct GripApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands { GripCommands(state: state) }
 
-        MenuBarExtra(isInserted: Binding(get: { state.showMenuBar }, set: { state.showMenuBar = $0 })) {
+        // Only write when it really changes: the menu bar controller sets this binding on every update,
+        // and an unconditional write would trigger a new update forever.
+        MenuBarExtra(isInserted: Binding(get: { state.showMenuBar }, set: { if state.showMenuBar != $0 { state.showMenuBar = $0 } })) {
             MenuBarView()
                 .environmentObject(state)
                 .preferredColorScheme(.dark)
