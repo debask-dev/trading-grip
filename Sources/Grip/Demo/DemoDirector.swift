@@ -89,7 +89,7 @@ final class DemoDirector {
         let p = state.price
         try await dragLine(.ticketSL, toPrice: p * 0.9925)
         try await sleep(0.6)
-        try await dragLine(.ticketTP, toPrice: p * 1.017)
+        try await dragLine(.ticketTP(0), toPrice: p * 1.017)
         try await sleep(0.6)
         caption("Grip rekent direct je positiegrootte en hefboom uit")
         try await dragLine(.ticketEntry, toPrice: p * 0.9985)

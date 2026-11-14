@@ -142,7 +142,7 @@ public final class HLClient: @unchecked Sendable {
                                     maxLeverage: u["maxLeverage"] as? Int ?? 10, onlyIsolated: u["onlyIsolated"] as? Bool ?? false))
             if i < ctxs.count {
                 let c = ctxs[i]
-                contexts[name] = AssetContext(markPx: d(c["markPx"]), prevDayPx: d(c["prevDayPx"]), funding: d(c["funding"]), dayVolume: d(c["dayNtlVlm"]))
+                contexts[name] = AssetContext(markPx: d(c["markPx"]), prevDayPx: d(c["prevDayPx"]), funding: d(c["funding"]), dayVolume: d(c["dayNtlVlm"]), openInterest: d(c["openInterest"]))
             }
         }
         return (assets, contexts)

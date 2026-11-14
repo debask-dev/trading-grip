@@ -126,10 +126,14 @@ extension NetworkBadge {
     }
 }
 
+enum MarketSort: String, CaseIterable { case volume, change, name }
+
 struct CoinPicker: View {
     @EnvironmentObject var state: AppState
     @State private var open = false
     @State private var query = ""
+    @AppStorage("marketSort") private var sortRaw = MarketSort.volume.rawValue
+    @AppStorage("marketSortAsc") private var ascending = false
 
     var body: some View {
         Button {
@@ -146,19 +150,31 @@ struct CoinPicker: View {
             VStack(spacing: 8) {
                 TextField("Zoek markt", text: $query)
                     .textFieldStyle(.roundedBorder)
+                HStack(spacing: 0) {
+                    header("Markt", .name).frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Prijs").frame(width: 82, alignment: .trailing)
+                    header("24u", .change).frame(width: 62, alignment: .trailing)
+                    header("Volume 24u", .volume).frame(width: 92, alignment: .trailing)
+                }
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.muted)
+                .padding(.horizontal, 8)
                 List(filtered) { a in
                     Button {
                         state.coin = a.name
                         open = false
                         query = ""
                     } label: {
-                        HStack {
-                            Text(a.name).font(.system(size: 13, weight: .semibold))
-                            Text("\(a.maxLeverage)×").font(.system(size: 10)).foregroundStyle(Theme.muted)
-                            Spacer()
+                        HStack(spacing: 0) {
+                            HStack(spacing: 5) {
+                                Text(a.name).font(.system(size: 13, weight: .semibold))
+                                Text("\(a.maxLeverage)×").font(.system(size: 10)).foregroundStyle(Theme.muted)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             if let c = state.contexts[a.name] {
-                                Text(Fmt.price(c.markPx)).mono(12)
-                                Text(Fmt.percent(c.change24h, decimals: 1)).mono(11).foregroundStyle(Theme.pnl(c.change24h)).frame(width: 58, alignment: .trailing)
+                                Text(Fmt.price(c.markPx)).mono(12).frame(width: 82, alignment: .trailing)
+                                Text(Fmt.percent(c.change24h, decimals: 1)).mono(11).foregroundStyle(Theme.pnl(c.change24h)).frame(width: 62, alignment: .trailing)
+                                Text("$" + Fmt.compact(c.dayVolume)).mono(11).foregroundStyle(Theme.muted).frame(width: 92, alignment: .trailing)
                             }
                         }
                         .contentShape(Rectangle())
@@ -168,13 +184,79 @@ struct CoinPicker: View {
                 .listStyle(.plain)
             }
             .padding(10)
-            .frame(width: 330, height: 420)
+            .frame(width: 420, height: 460)
         }
+    }
+
+    private var sort: MarketSort { MarketSort(rawValue: sortRaw) ?? .volume }
+
+    private func header(_ title: String, _ key: MarketSort) -> some View {
+        Button {
+            if sort == key { ascending.toggle() } else { sortRaw = key.rawValue; ascending = key == .name }
+        } label: {
+            HStack(spacing: 2) {
+                Text(title)
+                if sort == key { Image(systemName: ascending ? "chevron.up" : "chevron.down").font(.system(size: 8, weight: .bold)) }
+            }
+            .foregroundStyle(sort == key ? Theme.text : Theme.muted)
+        }
+        .buttonStyle(.plain)
+        .help("Sorteer op \(title.lowercased())")
     }
 
     private var filtered: [AssetInfo] {
         let q = query.trimmingCharacters(in: .whitespaces).uppercased()
-        return q.isEmpty ? state.assets : state.assets.filter { $0.name.uppercased().contains(q) }
+        let list = q.isEmpty ? state.assets : state.assets.filter { $0.name.uppercased().contains(q) }
+        let ctx = state.contexts
+        let sorted: [AssetInfo]
+        switch sort {
+        case .name: sorted = list.sorted { $0.name < $1.name }
+        case .change: sorted = list.sorted { (ctx[$0.name]?.change24h ?? 0) > (ctx[$1.name]?.change24h ?? 0) }
+        case .volume: sorted = list.sorted { (ctx[$0.name]?.dayVolume ?? 0) > (ctx[$1.name]?.dayVolume ?? 0) }
+        }
+        let flip = sort == .name ? !ascending : ascending
+        return flip ? sorted.reversed() : sorted
+    }
+}
+
+/// Last hour + 24h at a glance, above the chart.
+struct MarketStatsStrip: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        let ctx = state.contexts[state.coin]
+        let h = state.hourStats
+        HStack(spacing: 18) {
+            if let h {
+                stat("1u", Fmt.percent(h.change, decimals: 2), Theme.pnl(h.change))
+                stat("1u bereik", "\(Fmt.price(h.low)) – \(Fmt.price(h.high))")
+                stat("1u volume", "\(Fmt.compact(h.volume)) \(state.coin) · $\(Fmt.compact(h.volumeUsd))")
+            } else {
+                stat("1u", "…")
+            }
+            Divider().frame(height: 14)
+            if let ctx {
+                stat("24u volume", "$" + Fmt.compact(ctx.dayVolume))
+                stat("Funding", Fmt.number(ctx.funding * 100, decimals: 4) + "%/u", ctx.funding >= 0 ? Theme.muted : Theme.green)
+                    .help("Funding per uur. Positief: longs betalen shorts.")
+                if ctx.openInterest > 0 {
+                    stat("Open interest", "$" + Fmt.compact(ctx.openInterest * ctx.markPx))
+                }
+            }
+            Spacer()
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 14)
+        .frame(height: 26)
+        .background(Theme.panel.opacity(0.7))
+    }
+
+    private func stat(_ k: String, _ v: String, _ color: Color = Theme.text) -> some View {
+        HStack(spacing: 5) {
+            Text(k).foregroundStyle(Theme.dim)
+            Text(v).mono(11).foregroundStyle(color)
+        }
+        .lineLimit(1)
     }
 }
 
@@ -214,6 +296,8 @@ struct TradeScreen: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 ChartHeader()
+                Divider().overlay(Theme.line)
+                MarketStatsStrip()
                 Divider().overlay(Theme.line)
                 ChartView(state: state)
                     .overlay(alignment: .top) {
@@ -304,6 +388,14 @@ struct ChartHeader: View {
 
             Spacer()
             if state.loadingCandles { ProgressView().controlSize(.small) }
+            HStack(spacing: 4) {
+                ToolButton(icon: "camera", active: false, help: "Screenshot van de chart (⇧⌘S) – bewaard in \((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)") {
+                    state.takeScreenshot()
+                }
+                ToolButton(icon: "arrow.clockwise", active: false, help: "Vernieuwen: opnieuw verbinden en alles herladen (⌘R)") {
+                    state.refreshEverything()
+                }
+            }
         }
         .padding(.horizontal, 14)
         .frame(height: 50)

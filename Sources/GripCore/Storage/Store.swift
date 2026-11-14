@@ -87,6 +87,15 @@ public struct Fmt: Sendable {
         return Self.number(abs(v), decimals: decimals) + " " + coin
     }
 
+    /// 1.2K, 3.45M, 1.20B.
+    public static func compact(_ v: Double) -> String {
+        let a = abs(v)
+        if a >= 1e9 { return number(v / 1e9, decimals: 2) + "B" }
+        if a >= 1e6 { return number(v / 1e6, decimals: 2) + "M" }
+        if a >= 1e3 { return number(v / 1e3, decimals: 1) + "K" }
+        return number(v, decimals: a < 10 ? 2 : 0)
+    }
+
     public static func percent(_ fraction: Double, decimals: Int = 2, signed: Bool = true) -> String {
         let s = number(abs(fraction * 100), decimals: decimals) + "%"
         guard signed else { return (fraction < 0 ? "−" : "") + s }

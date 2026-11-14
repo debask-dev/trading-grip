@@ -20,6 +20,9 @@ public final class HLStream: NSObject, @unchecked Sendable {
     private var pingTimer: Timer?
     private var reconnectDelay: TimeInterval = 1
     private var stopped = false
+    private var watchdog: Timer?
+    /// When the last message arrived (mid prices arrive about every second).
+    public private(set) var lastMessage = Date()
 
     public init(network: HLNetwork) {
         self.network = network
@@ -29,10 +32,30 @@ public final class HLStream: NSObject, @unchecked Sendable {
     public func start() {
         stopped = false
         connect()
+        DispatchQueue.main.async { [weak self] in
+            self?.watchdog?.invalidate()
+            // A socket can die silently (sleep, network switch). No message for 20 s = reconnect.
+            self?.watchdog = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                guard let self, !self.stopped else { return }
+                if Date().timeIntervalSince(self.lastMessage) > 20 { self.forceReconnect() }
+            }
+        }
+    }
+
+    /// Drops the current socket and connects again right away (e.g. after the Mac wakes up).
+    public func forceReconnect() {
+        guard !stopped else { return }
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        reconnectDelay = 1
+        lastMessage = Date()
+        DispatchQueue.main.async { [weak self] in self?.onConnectionChange?(false) }
+        connect()
     }
 
     public func stop() {
         stopped = true
+        watchdog?.invalidate()
         pingTimer?.invalidate()
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
@@ -46,10 +69,19 @@ public final class HLStream: NSObject, @unchecked Sendable {
         send(["method": "subscribe", "subscription": ["type": "candle", "coin": coin, "interval": timeframe.rawValue]])
     }
 
+    private static let userChannels = ["userEvents", "userFills", "orderUpdates"]
+
     public func setUser(_ address: String?) {
-        if let old = user { send(["method": "unsubscribe", "subscription": ["type": "userEvents", "user": old]]) }
+        if let old = user {
+            for t in Self.userChannels { send(["method": "unsubscribe", "subscription": ["type": t, "user": old]]) }
+        }
         user = address
-        if let address { send(["method": "subscribe", "subscription": ["type": "userEvents", "user": address]]) }
+        subscribeUser()
+    }
+
+    private func subscribeUser() {
+        guard let user else { return }
+        for t in Self.userChannels { send(["method": "subscribe", "subscription": ["type": t, "user": user]]) }
     }
 
     private func connect() {
@@ -64,7 +96,7 @@ public final class HLStream: NSObject, @unchecked Sendable {
         if let c = candleSub {
             send(["method": "subscribe", "subscription": ["type": "candle", "coin": c.coin, "interval": c.tf.rawValue]])
         }
-        if let user { send(["method": "subscribe", "subscription": ["type": "userEvents", "user": user]]) }
+        subscribeUser()
         DispatchQueue.main.async { [weak self] in
             self?.pingTimer?.invalidate()
             self?.pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -108,6 +140,7 @@ public final class HLStream: NSObject, @unchecked Sendable {
     }
 
     private func handle(_ data: Data) {
+        lastMessage = Date()
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let channel = obj["channel"] as? String else { return }
         switch channel {
@@ -122,7 +155,9 @@ public final class HLStream: NSObject, @unchecked Sendable {
             var out: [String: Double] = [:]
             for (k, v) in mids { if let x = Double(v) { out[k] = x } }
             DispatchQueue.main.async { self.onMids?(out) }
-        case "user":
+        case "user", "userEvents", "userFills", "orderUpdates":
+            // Fills and order changes: refresh right away (a snapshot on subscribe is skipped).
+            if (obj["data"] as? [String: Any])?["isSnapshot"] as? Bool == true { return }
             DispatchQueue.main.async { self.onUserEvent?() }
         default:
             break

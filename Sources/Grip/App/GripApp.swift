@@ -82,8 +82,11 @@ struct GripCommands: Commands {
             Divider()
             Button("Chart resetten") { state.resetChart() }
                 .keyboardShortcut("r", modifiers: .option)
-            Button("Vernieuwen") { Task { await state.refreshAll() } }
+            Button("Vernieuwen") { state.refreshEverything() }
                 .keyboardShortcut("r", modifiers: .command)
+            Button("Screenshot van chart") { state.takeScreenshot() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+            Button("Screenshotmap openen") { state.revealScreenshotFolder() }
         }
 
         CommandMenu("Trade") {
@@ -93,6 +96,18 @@ struct GripCommands: Commands {
                 .keyboardShortcut("s", modifiers: .option)
             Button("Order annuleren (ticket)") { state.ticket = nil }
                 .disabled(state.ticket == nil)
+            Divider()
+            Button("Snel: market long") { state.quickTrade(long: true) }
+                .keyboardShortcut("b", modifiers: .option)
+            Button("Snel: market short") { state.quickTrade(long: false) }
+                .keyboardShortcut("n", modifiers: .option)
+            Button("Positie sluiten") { state.quickClose() }
+                .keyboardShortcut("x", modifiers: .option)
+                .disabled(state.position == nil)
+            Divider()
+            Picker("Handelspaneel", selection: $state.panelMode) {
+                ForEach(PanelMode.allCases) { Text($0.label).tag($0) }
+            }
             Divider()
             Button(state.hideAmounts ? "Bedragen tonen" : "Bedragen verbergen") { state.hideAmounts.toggle() }
                 .keyboardShortcut("h", modifiers: [.command, .shift])

@@ -9,10 +9,13 @@ struct TradePanel: View {
         ScrollView {
             VStack(spacing: 14) {
                 AccountCard()
-                RiskCard()
-                if state.ticket != nil {
+                PanelModePicker()
+                if state.panelMode == .quick {
+                    QuickCard()
+                } else if state.ticket != nil {
                     TicketCard()
-                } else if state.position == nil {
+                } else {
+                    if state.panelMode == .risk { RiskCard() }
                     NewTradeButtons()
                 }
                 if state.position != nil { PositionCard() }
@@ -22,6 +25,21 @@ struct TradePanel: View {
                 }
             }
             .padding(16)
+        }
+    }
+}
+
+struct PanelModePicker: View {
+    @EnvironmentObject var state: AppState
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Picker("", selection: $state.panelMode) {
+                ForEach(PanelMode.allCases) { m in Text(m.label).tag(m) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            Text(state.panelMode.hint).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -93,17 +111,120 @@ struct NewTradeButtons: View {
                     .buttonStyle(BigButtonStyle(color: Theme.red))
                     .help("Nieuwe short (⌥S)")
             }
-            Text("Zet entry, stop-loss en take-profit in de chart en sleep ze naar de juiste prijs. Grip rekent je positiegrootte uit.")
+            Text("Zet entry, stop-loss en take-profits in de chart en sleep ze naar de juiste prijs. Rechtsklik in de chart voor een order op die prijs.")
                 .font(.system(size: 11)).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
         }
     }
 }
+
+// MARK: - Scrub field
+
+/// A number you change by dragging left/right (⌥ fine, ⇧ coarse). Double-click to type.
+struct ScrubField: View {
+    var label: String
+    var value: Double
+    var step: Double
+    var display: (Double) -> String
+    var color: Color = Theme.text
+    var range: ClosedRange<Double>? = nil
+    /// nil = no lock; true/false = locked/unlocked.
+    var locked: Bool? = nil
+    var onLock: (() -> Void)? = nil
+    var onChange: (Double) -> Void
+
+    @State private var dragStart: Double?
+    @State private var editing = false
+    @State private var text = ""
+    @State private var hovering = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+            if let locked {
+                Button { onLock?() } label: {
+                    Image(systemName: locked ? "lock.fill" : "lock.open").font(.system(size: 10.5))
+                        .foregroundStyle(locked ? Theme.accent : Theme.dim)
+                }
+                .buttonStyle(.plain)
+                .help(locked ? "Vast: dit bepaalt de rest" : "Volgt uit de rest – klik om vast te zetten")
+            }
+            Spacer()
+            if editing {
+                TextField("", text: $text)
+                    .focused($focused)
+                    .multilineTextAlignment(.trailing)
+                    .textFieldStyle(.plain)
+                    .mono(13, .semibold)
+                    .frame(width: 112)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.35)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.accent.opacity(0.6)))
+                    .onSubmit { commit() }
+                    .onExitCommand { editing = false }
+                    .onChange(of: focused) { _, f in if !f { commit() } }
+            } else {
+                Text(display(value))
+                    .mono(13, .semibold)
+                    .foregroundStyle(color)
+                    .frame(width: 112, alignment: .trailing)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(hovering || dragStart != nil ? 0.4 : 0.25)))
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(dragStart != nil ? Theme.accent.opacity(0.6) : Color.clear))
+                    .contentShape(Rectangle())
+                    .onHover { h in
+                        hovering = h
+                        if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 2)
+                            .onChanged { g in
+                                if dragStart == nil { dragStart = value }
+                                let m = NSEvent.modifierFlags
+                                let mult = m.contains(.option) ? 0.1 : (m.contains(.shift) ? 10 : 1)
+                                onChange(clamp((dragStart ?? value) + Double(g.translation.width / 4).rounded() * step * mult))
+                            }
+                            .onEnded { _ in dragStart = nil }
+                    )
+                    .simultaneousGesture(TapGesture(count: 2).onEnded {
+                        text = plain(value)
+                        editing = true
+                        focused = true
+                    })
+                    .help("Sleep links/rechts (⌥ fijn, ⇧ grof) · dubbelklik om te typen")
+            }
+        }
+    }
+
+    private func clamp(_ v: Double) -> Double {
+        guard let r = range else { return v }
+        return min(max(v, r.lowerBound), r.upperBound)
+    }
+
+    private func plain(_ v: Double) -> String {
+        var s = String(format: "%.6f", v)
+        while s.hasSuffix("0") { s.removeLast() }
+        if s.hasSuffix(".") { s.removeLast() }
+        return s
+    }
+
+    private func commit() {
+        guard editing else { return }
+        editing = false
+        let cleaned = text.replacingOccurrences(of: ",", with: ".").filter { "0123456789.-".contains($0) }
+        if let v = Double(cleaned) { onChange(clamp(v)) }
+    }
+}
+
+// MARK: - Ticket (risk + manual panels)
 
 struct TicketCard: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
         let r = state.riskResult
+        let t = state.ticket
+        let tick = state.priceTick
         Card(title: "Nieuwe order", trailing: AnyView(r.map { SidePill(isLong: $0.isLong) })) {
             Picker("", selection: Binding(get: { state.ticket?.isMarket ?? false }, set: { state.ticket?.isMarket = $0 })) {
                 Text("Limit").tag(false)
@@ -113,27 +234,54 @@ struct TicketCard: View {
             .labelsHidden()
             .demoAnchor("ticket-type")
 
-            VStack(spacing: 8) {
-                if state.ticket?.isMarket == false {
-                    PriceField(label: "Entry", color: Theme.blue, value: Binding(get: { state.ticket?.entry ?? 0 }, set: { state.ticket?.entry = $0 }))
-                } else {
-                    KV("Entry", "≈ " + Fmt.price(state.price), color: Theme.blue)
+            // Size: risk → size (risk panel, lock on risk) or size → risk.
+            VStack(spacing: 7) {
+                if state.panelMode == .risk {
+                    ScrubField(label: "Max verlies", value: state.riskPercent, step: 0.05,
+                               display: { "\(Fmt.number($0, decimals: 2))% · \(state.fmt.usd(state.sizingEquity * $0 / 100, decimals: 2))" },
+                               color: Theme.red, range: 0.05...10, locked: t?.lock == .risk, onLock: { state.toggleLock() }) { state.setTicketRisk($0) }
                 }
-                PriceField(label: "Stop-loss", color: Theme.red, value: Binding(get: { state.ticket?.stopLoss ?? 0 }, set: { state.ticket?.stopLoss = $0 }))
-                PriceField(label: "Take-profit", color: Theme.green, value: Binding(get: { state.ticket?.takeProfit ?? 0 }, set: { state.ticket?.takeProfit = $0 > 0 ? $0 : nil }))
+                let sizeStep = pow(10, -Double(state.szDecimals))
+                ScrubField(label: "Grootte", value: (t?.lock == .size || state.panelMode == .manual) ? (t?.size ?? r?.size ?? 0) : (r?.size ?? 0),
+                           step: max(sizeStep, (r?.size ?? 0) / 200),
+                           display: { state.fmt.size($0, coin: state.coin, decimals: state.szDecimals) },
+                           range: 0...1e12, locked: state.panelMode == .risk ? (t?.lock == .size) : nil, onLock: { state.toggleLock() }) { state.setTicketSize($0) }
+                if state.panelMode == .manual, let r {
+                    KV("Risico", "\(state.fmt.usd(-r.riskUsd, decimals: 2)) · \(Fmt.number(r.riskPercentActual, decimals: 2))%", color: Theme.red)
+                }
+                ScrubField(label: "Hefboom", value: Double(t?.leverage ?? r?.leverage ?? 1), step: 1,
+                           display: { "\(Int($0))×\(t?.leverage == nil ? " auto" : "")" },
+                           range: 1...Double(state.asset?.maxLeverage ?? 50)) { state.setTicketLeverage(Int($0.rounded())) }
             }
 
             Divider().overlay(Theme.line)
 
+            VStack(spacing: 7) {
+                if t?.isMarket == false {
+                    ScrubField(label: "Entry", value: t?.entry ?? 0, step: tick, display: { Fmt.price($0) }, color: Theme.blue, range: tick...1e12) {
+                        state.ticket?.entry = state.roundToTick($0)
+                    }
+                } else {
+                    KV("Entry", "≈ " + Fmt.price(state.price), color: Theme.blue)
+                }
+                ScrubField(label: "Stop-loss", value: t?.stopLoss ?? 0, step: tick, display: { Fmt.price($0) }, color: Theme.red, range: tick...1e12) {
+                    state.ticket?.stopLoss = state.roundToTick($0)
+                }
+            }
+
+            TPLadder()
+
+            Divider().overlay(Theme.line)
+
             if let r {
-                VStack(spacing: 7) {
-                    KV("Positiegrootte", state.fmt.size(r.size, coin: state.coin, decimals: state.szDecimals))
+                VStack(spacing: 6) {
                     KV("Notional", state.fmt.usd(r.notional))
-                    KV("Hefboom", "\(r.leverage)×")
                     KV("Marge", state.fmt.usd(r.marginRequired))
-                    KV("Risico", state.fmt.usd(-r.riskUsd), color: Theme.red)
+                    KV("Risico tot stop", "\(state.fmt.usd(-r.riskUsd, decimals: 2)) · \(Fmt.number(r.riskPercentActual, decimals: 2))%", color: Theme.red)
+                    KV("Fees (in + stop)", state.fmt.usd(r.estFees, decimals: 2), color: Theme.muted)
                     if let rr = r.rewardRisk { KV("Risk : reward", "1 : " + Fmt.number(rr, decimals: 1)) }
-                    KV("Liquidatie ±", Fmt.price(r.estLiquidationPx), color: Theme.muted)
+                    if let p = r.potentialProfit { KV("Winst alle TP's", state.fmt.signedUsd(p, decimals: 2), color: Theme.green) }
+                    KV("Liquidatie ±", Fmt.price(r.estLiquidationPx), color: Theme.orange)
                 }
                 ForEach(r.warnings, id: \.self) { w in
                     Label(w, systemImage: "exclamationmark.triangle.fill")
@@ -175,23 +323,113 @@ struct TicketCard: View {
     }
 }
 
-struct PriceField: View {
-    var label: String
-    var color: Color
-    @Binding var value: Double
+/// Take-profit ladder: price and share per level, presets, break-even option.
+struct TPLadder: View {
+    @EnvironmentObject var state: AppState
 
     var body: some View {
-        HStack {
-            Text(label).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
-            Spacer()
-            TextField("", value: $value, format: .number.precision(.fractionLength(0...6)))
-                .multilineTextAlignment(.trailing)
-                .textFieldStyle(.plain)
-                .mono(13, .semibold)
-                .foregroundStyle(color)
-                .frame(width: 120)
-                .padding(.horizontal, 8).padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.black.opacity(0.25)))
+        let tps = state.ticket?.tps ?? []
+        let tick = state.priceTick
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(tps.enumerated()), id: \.element.id) { i, tp in
+                HStack(spacing: 6) {
+                    ScrubField(label: "TP\(i + 1)", value: tp.price, step: tick, display: { Fmt.price($0) }, color: Theme.green, range: tick...1e12) {
+                        if state.ticket?.tps.indices.contains(i) == true { state.ticket?.tps[i].price = state.roundToTick($0) }
+                    }
+                    if tps.count > 1 {
+                        ScrubPct(value: tp.pct) { state.setTPPct(i, $0) }
+                        Button { state.removeTicketTP(i) } label: {
+                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Take-profit weghalen")
+                    }
+                }
+            }
+            HStack(spacing: 6) {
+                Button("+ TP") { state.addTicketTP() }
+                    .buttonStyle(ChipStyle(active: false))
+                    .disabled(tps.count >= 5)
+                if tps.count > 1 {
+                    Button("Gelijk") { state.applySplitPreset(Array(repeating: (100 / Double(tps.count) / 5).rounded(.down) * 5, count: tps.count)) }
+                        .buttonStyle(ChipStyle(active: false))
+                    if tps.count == 2 { Button("70/30") { state.applySplitPreset([70, 30]) }.buttonStyle(ChipStyle(active: tps.map(\.pct) == [70, 30])) }
+                    if tps.count == 3 { Button("50/30/20") { state.applySplitPreset([50, 30, 20]) }.buttonStyle(ChipStyle(active: tps.map(\.pct) == [50, 30, 20])) }
+                }
+            }
+            if tps.count > 1 {
+                Toggle(isOn: Binding(get: { state.ticket?.moveSLToBreakEven ?? false }, set: { state.ticket?.moveSLToBreakEven = $0 })) {
+                    Text("Stop naar break-even na TP1").font(.system(size: 11.5))
+                }
+                .toggleStyle(.checkbox)
+            }
+            Text("TP's zijn limit-orders (reduce-only). Bij een limit-entry plaatst Grip ze zodra de entry gevuld is.")
+                .font(.system(size: 10)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Small percentage scrubber for the TP ladder.
+struct ScrubPct: View {
+    var value: Double
+    var onChange: (Double) -> Void
+    @State private var start: Double?
+    var body: some View {
+        Text("\(Int(value))%")
+            .mono(11.5, .semibold)
+            .frame(width: 40)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(start == nil ? 0.06 : 0.14)))
+            .contentShape(Rectangle())
+            .onHover { h in if h { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() } }
+            .gesture(DragGesture(minimumDistance: 2)
+                .onChanged { g in
+                    if start == nil { start = value }
+                    onChange((start ?? value) + Double(g.translation.width / 6).rounded() * 5)
+                }
+                .onEnded { _ in start = nil })
+            .help("Deel van de positie – sleep links/rechts")
+    }
+}
+
+// MARK: - Quick panel
+
+struct QuickCard: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        let p = state.price
+        let size = p > 0 ? state.quickUsd / p : 0
+        let riskUsd = size * p * state.quickSLPct / 100
+        Card(title: "Snel traden") {
+            VStack(spacing: 7) {
+                ScrubField(label: "Orderwaarde", value: state.quickUsd, step: 10, display: { state.fmt.usd($0) }, range: 10...10_000_000) { state.quickUsd = $0.rounded() }
+                ScrubField(label: "Hefboom", value: Double(state.quickLev), step: 1, display: { "\(Int($0))×" },
+                           range: 1...Double(state.asset?.maxLeverage ?? 50)) { state.quickLev = Int($0.rounded()) }
+                ScrubField(label: "Stop-loss", value: state.quickSLPct, step: 0.05, display: { "\(Fmt.number($0, decimals: 2))%" }, color: Theme.red, range: 0.05...50) { state.quickSLPct = $0 }
+                ScrubField(label: "Take-profit", value: state.quickTPPct, step: 0.05, display: { "\(Fmt.number($0, decimals: 2))%" }, color: Theme.green, range: 0.05...200) { state.quickTPPct = $0 }
+            }
+            VStack(spacing: 5) {
+                KV("Grootte", state.fmt.size(size, coin: state.coin, decimals: state.szDecimals))
+                KV("Marge", state.fmt.usd(state.quickUsd / Double(max(state.quickLev, 1))))
+                KV("Risico tot stop ≈", "\(state.fmt.usd(-riskUsd, decimals: 2)) · \(Fmt.number(riskUsd / max(state.sizingEquity, 1) * 100, decimals: 2))%", color: Theme.red)
+            }
+            HStack(spacing: 8) {
+                Button { state.quickTrade(long: true) } label: { Text("Market long").frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: Theme.green))
+                    .help("⌥B")
+                Button { state.quickTrade(long: false) } label: { Text("Market short").frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: Theme.red))
+                    .help("⌥N")
+            }
+            .disabled(state.busy)
+            if state.position != nil {
+                Button { state.quickClose() } label: { Text("Sluit \(state.coin)-positie").frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                    .help("⌥X")
+            }
+            Text("⌥B long · ⌥N short · ⌥X sluiten")
+                .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
         }
     }
 }
@@ -231,29 +469,23 @@ struct PositionCard: View {
                             .demoAnchor("close-\(f)")
                     }
                 }
+                Text("Rechtsklik in de chart om een deel op een prijs te sluiten, of ✕ op de positielijn om alles te sluiten.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
 
-                HStack {
-                    Text("SLEEP-CLOSE IN CHART").font(.system(size: 10.5, weight: .semibold)).tracking(0.8).foregroundStyle(Theme.muted)
-                    Spacer()
-                    Picker("", selection: $state.dragCloseFraction) {
-                        Text("25%").tag(0.25)
-                        Text("50%").tag(0.5)
-                        Text("100%").tag(1.0)
+                let hasTp = state.coinOrders.contains { ($0.isTrigger && $0.tpsl == .tp) || (!$0.isTrigger && $0.reduceOnly) }
+                let sl = state.coinOrders.first { $0.isTrigger && $0.tpsl == .sl }
+                HStack(spacing: 6) {
+                    if !hasTp { Button("+ Take-profit") { Task { await state.addPositionTpSl(.tp) } }.buttonStyle(ChipStyle(active: false, large: true)) }
+                    if sl == nil { Button("+ Stop-loss") { Task { await state.addPositionTpSl(.sl) } }.buttonStyle(ChipStyle(active: false, large: true)) }
+                    if let sl, let be = state.breakEven, pos.isLong ? be > sl.displayPx : be < sl.displayPx {
+                        Button("Stop → break-even") { Task { await state.moveStopToBreakEven(coin: pos.coin, force: true) } }
+                            .buttonStyle(ChipStyle(active: false, large: true))
+                            .help("Zet de stop-loss op \(Fmt.price(be)): deze trade kan dan niet meer verliezen (na fees).")
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 150)
                 }
-                Text("Sleep het oranje ✕ op de positielijn naar een prijs voor een limit close.")
-                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
-
-                let hasTp = state.coinOrders.contains { $0.isTrigger && $0.tpsl == .tp }
-                let hasSl = state.coinOrders.contains { $0.isTrigger && $0.tpsl == .sl }
-                if !hasTp || !hasSl {
-                    HStack(spacing: 6) {
-                        if !hasTp { Button("+ Take-profit") { Task { await state.addPositionTpSl(.tp) } }.buttonStyle(ChipStyle(active: false, large: true)) }
-                        if !hasSl { Button("+ Stop-loss") { Task { await state.addPositionTpSl(.sl) } }.buttonStyle(ChipStyle(active: false, large: true)) }
-                    }
+                if state.breakEvenAfterTP.contains(pos.coin) {
+                    Label("Stop gaat naar break-even na de eerste TP", systemImage: "arrow.right.to.line")
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.accent)
                 }
             }
         }

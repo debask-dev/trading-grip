@@ -155,6 +155,18 @@ struct ChartSettingsView: View {
                 }
             }
 
+            Section("Screenshots (⇧⌘S)") {
+                LabeledContent("Map") {
+                    HStack {
+                        Text((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)
+                            .lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                        Button("Kies…") { state.chooseScreenshotFolder() }
+                        Button("Open") { state.revealScreenshotFolder() }
+                    }
+                }
+                Toggle("Ook naar het klembord kopiëren", isOn: $state.screenshotToClipboard)
+            }
+
             Section {
                 LabeledContent("Kleur") {
                     ColorPicker("", selection: hexBinding({ state.lineAppearance.color }, { state.lineAppearance.color = $0 }), supportsOpacity: true).labelsHidden()

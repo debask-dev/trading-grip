@@ -73,7 +73,8 @@ public struct AssetContext: Equatable, Sendable {
     public var markPx: Double
     public var prevDayPx: Double
     public var funding: Double
-    public var dayVolume: Double
+    public var dayVolume: Double          // USD
+    public var openInterest: Double = 0   // in coins
     public var change24h: Double { prevDayPx > 0 ? (markPx - prevDayPx) / prevDayPx : 0 }
 }
 

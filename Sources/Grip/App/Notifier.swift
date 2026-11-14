@@ -51,6 +51,8 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = Notifier()
     private var authorized = false
     private var asked = false
+    /// NSSound stops when it is released, so keep the playing sounds alive.
+    private var playing: [NSSound] = []
 
     private var center: UNUserNotificationCenter? {
         // UserNotifications needs a real app bundle (not available for a bare `swift run`).
@@ -81,7 +83,20 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func play(_ event: TradeEvent) {
-        NSSound(named: NSSound.Name(event.sound))?.play()
+        guard let sound = NSSound(named: NSSound.Name(event.sound))?.copy() as? NSSound else { return }
+        playing.removeAll { !$0.isPlaying }
+        playing.append(sound)
+        sound.play()
+    }
+
+    /// Camera shutter for screenshots (Grab sound when available, otherwise a soft Pop).
+    func playShutter() {
+        let grab = "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Grab.aif"
+        let s = (FileManager.default.fileExists(atPath: grab) ? NSSound(contentsOfFile: grab, byReference: true) : nil) ?? NSSound(named: "Pop")
+        guard let sound = s else { return }
+        playing.removeAll { !$0.isPlaying }
+        playing.append(sound)
+        sound.play()
     }
 
     // Show banners also while Grip is in front.

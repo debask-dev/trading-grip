@@ -49,6 +49,9 @@ struct ChartView: NSViewRepresentable {
         v.onToolFinished = { s.tool = .cursor }
         v.onHorizontalCreate = { p in s.addHorizontal(p) }
         v.onTimeframeTyped = { tf in s.timeframe = tf }
+        v.onLineClose = { id in s.lineClosed(id) }
+        v.onTradeSelect = { id in s.highlightTradeID = id }
+        v.priceMenuItems = { px in s.priceMenu(at: px) }
         v.needsDisplay = true
     }
 }

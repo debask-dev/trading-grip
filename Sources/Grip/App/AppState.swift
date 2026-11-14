@@ -17,12 +17,62 @@ enum MainTab: String, CaseIterable, Identifiable {
 
 enum ChartTool: Equatable { case cursor, trendline, horizontal }
 
+/// One take-profit of the ladder in the ticket.
+struct TPLevel: Equatable, Identifiable {
+    var id = UUID()
+    var price: Double
+    var pct: Double          // % of the position
+}
+
+enum SizeLock: String { case risk, size }
+
+/// The three trade panels.
+enum PanelMode: String, CaseIterable, Identifiable {
+    case risk, quick, manual
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .risk: return "Risico"
+        case .quick: return "Snel"
+        case .manual: return "Handmatig"
+        }
+    }
+    var hint: String {
+        switch self {
+        case .risk: return "Je stop en je max verlies bepalen de grootte. Pak het slotje om dat om te draaien."
+        case .quick: return "Vaste orderwaarde, één klik market in en uit."
+        case .manual: return "Alles vrij invullen. Grip rekent mee en waarschuwt alleen."
+        }
+    }
+}
+
 /// The order being prepared on the chart before it is sent.
 struct Ticket: Equatable {
     var entry: Double
     var stopLoss: Double
-    var takeProfit: Double?
+    var tps: [TPLevel]
     var isMarket: Bool
+    var lock: SizeLock = .risk
+    var size: Double? = nil          // set by hand (lock on size, or the manual panel)
+    var leverage: Int? = nil         // nil = the minimum needed
+    var moveSLToBreakEven = false
+    var takeProfit: Double? { tps.first?.price }
+}
+
+/// Take-profits waiting for a limit entry to fill (Hyperliquid only accepts them once there is a position).
+struct PendingTPs: Codable, Equatable {
+    var entryOid: Int64
+    var isLong: Bool
+    var prices: [Double]
+    var fractions: [Double]
+}
+
+struct HourStats: Equatable {
+    var change: Double
+    var high: Double
+    var low: Double
+    var volume: Double
+    var volumeUsd: Double
 }
 
 struct Toast: Identifiable, Equatable {
@@ -33,7 +83,7 @@ struct Toast: Identifiable, Equatable {
 }
 
 enum LineID: Hashable {
-    case ticketEntry, ticketSL, ticketTP, order(Int64), position, breakEven, liquidation
+    case ticketEntry, ticketSL, ticketTP(Int), ticketLiq, order(Int64), position, breakEven, liquidation
 }
 
 /// A buy/sell marker on the chart.
@@ -79,6 +129,7 @@ struct ChartLine: Identifiable, Equatable {
     var dashed: Bool
     var draggable: Bool
     var emphasized: Bool = false
+    var closable: Bool = false
 }
 
 @MainActor
@@ -135,7 +186,8 @@ final class AppState: ObservableObject {
             defaults.set(coin, forKey: "coin")
             ticket = nil
             selectedTrendline = nil
-            Task { await loadCandles() }
+            hourStats = nil
+            Task { await loadCandles(); await refreshHourStats() }
         }
     }
     @Published var timeframe: Timeframe {
@@ -192,17 +244,44 @@ final class AppState: ObservableObject {
     @Published var eventPrefs: [String: EventPref] = AppState.loadJSON([String: EventPref].self, "eventPrefs") ?? [:] {
         didSet { saveJSON(eventPrefs, "eventPrefs") }
     }
+    @Published var panelMode: PanelMode = PanelMode(rawValue: UserDefaults.standard.string(forKey: "panelMode") ?? "") ?? .risk {
+        didSet { defaults.set(panelMode.rawValue, forKey: "panelMode"); panelModeChanged(oldValue) }
+    }
+    /// Last used take-profit split, e.g. [50, 30, 20].
+    @Published var lastSplit: [Double] = UserDefaults.standard.array(forKey: "lastSplit") as? [Double] ?? [50, 30, 20] {
+        didSet { defaults.set(lastSplit, forKey: "lastSplit") }
+    }
+    @Published var quickUsd: Double = UserDefaults.standard.object(forKey: "quickUsd") as? Double ?? 1000 { didSet { defaults.set(quickUsd, forKey: "quickUsd") } }
+    @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 { didSet { defaults.set(quickLev, forKey: "quickLev") } }
+    @Published var quickSLPct: Double = UserDefaults.standard.object(forKey: "quickSLPct") as? Double ?? 0.5 { didSet { defaults.set(quickSLPct, forKey: "quickSLPct") } }
+    @Published var quickTPPct: Double = UserDefaults.standard.object(forKey: "quickTPPct") as? Double ?? 1.0 { didSet { defaults.set(quickTPPct, forKey: "quickTPPct") } }
+    @Published var pendingTPs: [String: PendingTPs] = AppState.loadJSON([String: PendingTPs].self, "pendingTPs") ?? [:] {
+        didSet { saveJSON(pendingTPs, "pendingTPs") }
+    }
+    /// Coins whose stop moves to break-even after the first take-profit.
+    @Published var breakEvenAfterTP: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "breakEvenAfterTP") ?? []) {
+        didSet { defaults.set(Array(breakEvenAfterTP), forKey: "breakEvenAfterTP") }
+    }
+    @Published var hourStats: HourStats?
+    @Published var screenshotFolder: String = UserDefaults.standard.string(forKey: "screenshotFolder")
+        ?? (FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?.appendingPathComponent("Grip").path ?? NSHomeDirectory()) {
+        didSet { defaults.set(screenshotFolder, forKey: "screenshotFolder") }
+    }
+    @Published var screenshotToClipboard: Bool = UserDefaults.standard.object(forKey: "screenshotToClipboard") as? Bool ?? true {
+        didSet { defaults.set(screenshotToClipboard, forKey: "screenshotToClipboard") }
+    }
     private var lastFeeFetch = Date.distantPast
     private var previousOrders: [OpenOrder] = []
     @Published var chartResetToken = 0
     @Published var showShortcuts = false
     private var demo: DemoDirector?
 
-    private var client: HLClient
+    private(set) var client: HLClient
     private var stream: HLStream
     private var started = false
     private var accountTimer: Timer?
     private var historyTimer: Timer?
+    private var hourTimer: Timer?
     private var candleRequestID = 0
     private var paper: PaperExchange
     private var paperKey: String { isDemoVideo ? "paper-demo" : "paper-\(network.rawValue)" }
@@ -269,7 +348,8 @@ final class AppState: ObservableObject {
         return try? JSONDecoder().decode(T.self, from: d)
     }
     var asset: AssetInfo? { assets.first { $0.name == coin } }
-    var price: Double { mids[coin] ?? candles.last?.close ?? 0 }
+    /// Last traded price: the live candle close (updates with every trade), the mid as fallback.
+    var price: Double { candles.last?.close ?? mids[coin] ?? 0 }
     var position: Position? { account.position(for: coin) }
     var coinOrders: [OpenOrder] { account.orders(for: coin) }
     var hasAccount: Bool { paperMode || EthSigner.isValidAddress(accountAddress) }
@@ -286,9 +366,13 @@ final class AppState: ObservableObject {
     var riskResult: RiskResult? {
         guard let t = ticket else { return nil }
         let entry = t.isMarket ? price : t.entry
-        return RiskCalculator.calculate(RiskInput(accountValue: sizingEquity, riskPercent: riskPercent, entry: entry, stopLoss: t.stopLoss,
-                                                  takeProfit: t.takeProfit, maxLeverage: asset?.maxLeverage ?? 20, szDecimals: szDecimals,
-                                                  takerFeeRate: feeRates.taker, entryFeeRate: t.isMarket ? feeRates.taker : feeRates.maker))
+        var input = RiskInput(accountValue: sizingEquity, riskPercent: riskPercent, entry: entry, stopLoss: t.stopLoss,
+                              takeProfit: t.takeProfit, maxLeverage: asset?.maxLeverage ?? 20, szDecimals: szDecimals,
+                              takerFeeRate: feeRates.taker, entryFeeRate: t.isMarket ? feeRates.taker : feeRates.maker)
+        input.takeProfits = t.tps.map { TPTarget(price: $0.price, fraction: $0.pct / 100) }
+        if t.lock == .size || panelMode == .manual { input.sizeOverride = t.size }
+        input.leverageOverride = t.leverage
+        return RiskCalculator.calculate(input)
     }
 
     // MARK: Lifecycle
@@ -298,6 +382,7 @@ final class AppState: ObservableObject {
         started = true
         if !isDemoVideo { Notifier.shared.setUp() }
         configureStream()
+        observeSystem()
         // Launch arguments for automated screenshots: -GripSkipOnboarding YES -GripDemoTicket YES
         if !hasAccount && !defaults.bool(forKey: "GripSkipOnboarding") { showOnboarding = true }
         await loadMeta()
@@ -316,6 +401,10 @@ final class AppState: ObservableObject {
         }
         accountTimer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refreshAccount() }
+        }
+        await refreshHourStats()
+        hourTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.refreshHourStats() }
         }
         historyTimer = Timer.scheduledTimer(withTimeInterval: 90, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -354,6 +443,8 @@ final class AppState: ObservableObject {
         stream.setCandleSubscription(coin: coin, timeframe: timeframe)
         if hasAccount { stream.setUser(accountAddress) }
     }
+
+    func reconnectStream() { stream.forceReconnect() }
 
     private func networkChanged() {
         stream.stop()
@@ -443,11 +534,19 @@ final class AppState: ObservableObject {
         guard hasAccount else { return }
         do {
             let state = try await client.accountState(user: accountAddress.trimmingCharacters(in: .whitespaces))
+            // Position or orders changed (a fill, a TP/SL hit): fetch the fills now instead of waiting.
+            let oldPositions = Dictionary(account.positions.map { ($0.coin, $0.size) }, uniquingKeysWith: { a, _ in a })
+            let newPositions = Dictionary(state.positions.map { ($0.coin, $0.size) }, uniquingKeysWith: { a, _ in a })
+            let changed = oldPositions != newPositions || Set(account.openOrders.map(\.oid)) != Set(state.openOrders.map(\.oid))
+            if changed && !(account.positions.isEmpty && account.openOrders.isEmpty && previousOrders.isEmpty) {
+                Task { await self.refreshHistory() }
+            }
             for o in state.openOrders where orderKinds[o.oid] == nil {
                 orderKinds[o.oid] = o.isTrigger ? (o.tpsl == .tp ? .takeProfit : .stopLoss) : (o.reduceOnly ? .takeProfit : .limit)
             }
             previousOrders = state.openOrders
             account = state
+            await checkPendingTPs()
             accountError = nil
             // Drop optimistic drag prices once the exchange reflects them (or the order is gone).
             pendingOrderPrices = pendingOrderPrices.filter { oid, px in
@@ -526,6 +625,7 @@ final class AppState: ObservableObject {
         await loadCandles()
         await refreshAccount()
         await refreshHistory()
+        await refreshHourStats()
     }
 
     // MARK: Keys
@@ -539,15 +639,109 @@ final class AppState: ObservableObject {
 
     // MARK: Ticket
 
-    func newTicket(long: Bool) {
+    /// New order ticket. Lines are placed inside what is visible on the chart, so nothing starts off-screen.
+    func newTicket(long: Bool, entry atPrice: Double? = nil) {
         let p = price
         guard p > 0 else { return }
+        if panelMode == .quick { panelMode = .risk }
         let r = { (v: Double) in HLFormat.roundPrice(v, szDecimals: self.szDecimals) }
-        ticket = Ticket(entry: r(long ? p * 0.997 : p * 1.003),
-                        stopLoss: r(long ? p * 0.987 : p * 1.013),
-                        takeProfit: r(long ? p * 1.023 : p * 0.977),
-                        isMarket: false)
+        let vis = chartCanvas?.visiblePriceRange ?? (lo: p * 0.98, hi: p * 1.02)
+        let span = max(vis.hi - vis.lo, p * 0.002)
+        let dir: Double = long ? 1 : -1
+        let entry = atPrice ?? (p - dir * span * 0.04)
+        let risk = span * 0.08
+        let split = lastSplit.isEmpty ? [100] : lastSplit
+        let edge = long ? vis.hi - span * 0.04 : vis.lo + span * 0.04
+        var tps: [TPLevel] = []
+        for (i, pct) in split.enumerated() {
+            var px = entry + dir * risk * (1.5 + Double(i))
+            if long ? px > edge : px < edge { px = entry + (edge - entry) * Double(i + 1) / Double(split.count) }
+            tps.append(TPLevel(price: r(px), pct: pct))
+        }
+        ticket = Ticket(entry: r(entry), stopLoss: r(entry - dir * risk), tps: tps, isMarket: false,
+                        size: nil, leverage: nil, moveSLToBreakEven: split.count > 1)
+        if panelMode == .manual { ticket?.size = riskResult?.size }
         tab = .trade
+    }
+
+    private func panelModeChanged(_ old: PanelMode) {
+        guard var t = ticket else { return }
+        if panelMode == .manual { t.size = t.size ?? riskResult?.size }
+        if panelMode == .risk { t.lock = .risk; t.size = nil }
+        ticket = t
+    }
+
+    // MARK: Ticket editing (panel and chart)
+
+    func setTicketRisk(_ pct: Double) {
+        riskPercent = min(max(pct, 0.05), 10)
+        ticket?.lock = .risk
+        if panelMode != .manual { ticket?.size = nil }
+    }
+
+    func setTicketSize(_ size: Double) {
+        ticket?.size = max(size, 0)
+        if panelMode == .risk { ticket?.lock = .size }
+    }
+
+    func setTicketLeverage(_ lev: Int) {
+        ticket?.leverage = min(max(lev, 1), asset?.maxLeverage ?? 50)
+    }
+
+    func toggleLock() {
+        guard let t = ticket else { return }
+        if t.lock == .risk { ticket?.size = riskResult?.size; ticket?.lock = .size } else { ticket?.lock = .risk; ticket?.size = nil }
+    }
+
+    func addTicketTP(at px: Double? = nil) {
+        guard var t = ticket else { return }
+        let dir: Double = t.stopLoss < t.entry ? 1 : -1
+        let risk = abs(t.entry - t.stopLoss)
+        let last = t.tps.last?.price ?? t.entry
+        t.tps.append(TPLevel(price: roundToTick(px ?? (last + dir * risk)), pct: 0))
+        let n = t.tps.count
+        t.tps = applySplit(lastSplit.count == n ? lastSplit : Array(repeating: (100 / Double(n) / 5).rounded(.down) * 5, count: n), to: t.tps)
+        ticket = t
+        lastSplit = t.tps.map(\.pct)
+    }
+
+    func removeTicketTP(_ i: Int) {
+        guard var t = ticket, t.tps.indices.contains(i), t.tps.count > 1 else { return }
+        let removed = t.tps.remove(at: i)
+        t.tps[t.tps.count - 1].pct += removed.pct
+        if t.tps.count == 1 { t.moveSLToBreakEven = false }
+        ticket = t
+        lastSplit = t.tps.map(\.pct)
+    }
+
+    /// Sets one TP's share; the last TP (or the one before it) absorbs the difference so the total stays 100%.
+    func setTPPct(_ i: Int, _ value: Double) {
+        guard var t = ticket, t.tps.indices.contains(i), t.tps.count > 1 else { return }
+        let v = min(max((value / 5).rounded() * 5, 5), 100 - 5 * Double(t.tps.count - 1))
+        t.tps[i].pct = v
+        let k = i == t.tps.count - 1 ? t.tps.count - 2 : t.tps.count - 1
+        let rest = 100 - t.tps.reduce(0) { $0 + $1.pct }
+        t.tps[k].pct = max(5, t.tps[k].pct + rest)
+        ticket = t
+        lastSplit = t.tps.map(\.pct)
+    }
+
+    func applySplitPreset(_ parts: [Double]) {
+        guard var t = ticket else { return }
+        t.tps = applySplit(parts, to: t.tps)
+        ticket = t
+        lastSplit = t.tps.map(\.pct)
+    }
+
+    private func applySplit(_ parts: [Double], to tps: [TPLevel]) -> [TPLevel] {
+        var out = tps
+        let n = out.count
+        guard n > 0 else { return out }
+        var p = Array(parts.prefix(n))
+        while p.count < n { p.append(5) }
+        p[n - 1] += 100 - p.reduce(0, +)
+        for i in 0..<n { out[i].pct = p[i] }
+        return out
     }
 
     func roundToTick(_ p: Double) -> Double {
@@ -578,7 +772,7 @@ final class AppState: ObservableObject {
         defer { busy = false }
         do {
             let available = max(account.withdrawable, 1)
-            var lev = max(r.leverage, Int((r.notional / (available * 0.95)).rounded(.up)))
+            var lev = t.leverage ?? max(r.leverage, Int((r.notional / (available * 0.95)).rounded(.up)))
             lev = min(max(lev, 1), a.maxLeverage)
             let cross = useCrossMargin && !a.onlyIsolated
             try await execLeverage(a, isCross: cross, leverage: lev)
@@ -586,12 +780,16 @@ final class AppState: ObservableObject {
             let isBuy = r.isLong
             let entryPx = t.isMarket ? HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals) : t.entry
             let refEntry = t.isMarket ? price : t.entry
-            var reqs = [OrderRequest(asset: a, isBuy: isBuy, size: r.size, limitPx: entryPx, reduceOnly: false, kind: .limit(tif: t.isMarket ? "Ioc" : "Gtc"))]
-            if let tp = t.takeProfit, isBuy ? tp > refEntry : tp < refEntry {
-                reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: tp, reduceOnly: true, kind: .trigger(triggerPx: tp, isMarket: true, tpsl: .tp)))
-            }
-            reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: t.stopLoss, reduceOnly: true, kind: .trigger(triggerPx: t.stopLoss, isMarket: true, tpsl: .sl)))
+            let reqs = [
+                OrderRequest(asset: a, isBuy: isBuy, size: r.size, limitPx: entryPx, reduceOnly: false, kind: .limit(tif: t.isMarket ? "Ioc" : "Gtc")),
+                OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: t.stopLoss, reduceOnly: true, kind: .trigger(triggerPx: t.stopLoss, isMarket: true, tpsl: .sl)),
+            ]
             let statuses = try await execOrders(reqs, grouping: "normalTpsl")
+            // Take-profits are reduce-only limit orders (maker fee): placed right after the fill.
+            let ladder = t.tps.filter { isBuy ? $0.price > refEntry : $0.price < refEntry }
+            let total = max(ladder.reduce(0) { $0 + $1.pct }, 1)
+            let pending = PendingTPs(entryOid: 0, isLong: isBuy, prices: ladder.map(\.price), fractions: ladder.map { $0.pct / total })
+            if t.moveSLToBreakEven && ladder.count > 1 { breakEvenAfterTP.insert(coin) } else { breakEvenAfterTP.remove(coin) }
 
             let plan = TradePlan(coin: coin, isLong: isBuy, entry: refEntry, stopLoss: t.stopLoss, takeProfit: t.takeProfit,
                                  riskUsd: r.riskUsd, riskPercent: riskPercent)
@@ -600,8 +798,10 @@ final class AppState: ObservableObject {
 
             switch statuses.first {
             case .filled?:
-                break   // the fill is announced by `announce` (notification + sound)
-            case .resting?:
+                await refreshAccount()
+                if !ladder.isEmpty { await placeTakeProfits(coin: coin, pending) }
+            case .resting(let oid)?:
+                if !ladder.isEmpty { var p = pending; p.entryOid = oid; pendingTPs[coin] = p }
                 toast("Limit \(isBuy ? "long" : "short") geplaatst @ \(Fmt.price(entryPx)) · \(lev)×", .success)
                 notify(.orderPlaced, "Limit \(isBuy ? "long" : "short") geplaatst", "\(coin) @ \(Fmt.price(entryPx)) · \(lev)×")
             default:
@@ -618,20 +818,20 @@ final class AppState: ObservableObject {
 
     // MARK: Orders & position management
 
-    private func requireSigner() throws -> EthSigner {
+    func requireSigner() throws -> EthSigner {
         do { return try loadSigner() } catch {
             throw HLError.exchange("Dit account is alleen-lezen. Voeg een API-wallet toe in het accountscherm (⇧⌘A) om te handelen.")
         }
     }
 
     /// Current prices for paper fills (mids, plus the chart's last close as fallback).
-    private func marks() -> [String: Double] {
+    func marks() -> [String: Double] {
         var m = mids
         if m[coin] == nil, let c = candles.last?.close { m[coin] = c }
         return m
     }
 
-    private func execOrders(_ reqs: [OrderRequest], grouping: String = "na") async throws -> [OrderStatus] {
+    func execOrders(_ reqs: [OrderRequest], grouping: String = "na") async throws -> [OrderStatus] {
         if paperMode {
             let st = try paper.place(reqs, grouping: grouping, marks: marks())
             paperChanged()
@@ -640,17 +840,17 @@ final class AppState: ObservableObject {
         return try await client.exchange(HLActions.order(reqs, grouping: grouping), signer: try requireSigner())
     }
 
-    private func execModify(oid: Int64, _ req: OrderRequest) async throws {
+    func execModify(oid: Int64, _ req: OrderRequest) async throws {
         if paperMode { try paper.modify(oid: oid, to: req); paperChanged(); return }
         try await client.exchange(HLActions.modify(oid: oid, order: req), signer: try requireSigner())
     }
 
-    private func execCancel(_ a: AssetInfo, oid: Int64) async throws {
+    func execCancel(_ a: AssetInfo, oid: Int64) async throws {
         if paperMode { try paper.cancel(oid: oid); paperChanged(); return }
         try await client.exchange(HLActions.cancel(asset: a.index, oid: oid), signer: try requireSigner())
     }
 
-    private func execLeverage(_ a: AssetInfo, isCross: Bool, leverage: Int) async throws {
+    func execLeverage(_ a: AssetInfo, isCross: Bool, leverage: Int) async throws {
         if paperMode { paper.updateLeverage(coin: a.name, isCross: isCross, leverage: leverage); return }
         try await client.exchange(HLActions.updateLeverage(asset: a.index, isCross: isCross, leverage: leverage), signer: try requireSigner())
     }
@@ -814,18 +1014,23 @@ final class AppState: ObservableObject {
 
     var chartLines: [ChartLine] {
         var lines: [ChartLine] = []
-        if let t = ticket {
-            if let tp = t.takeProfit { lines.append(ChartLine(id: .ticketTP, price: tp, color: Palette.green, dashed: true, draggable: true)) }
+        if let t = ticket, panelMode != .quick {
+            for (i, tp) in t.tps.enumerated() {
+                lines.append(ChartLine(id: .ticketTP(i), price: tp.price, color: Palette.green, dashed: true, draggable: true, closable: t.tps.count > 1))
+            }
             lines.append(ChartLine(id: .ticketSL, price: t.stopLoss, color: Palette.red, dashed: true, draggable: true))
-            if !t.isMarket { lines.append(ChartLine(id: .ticketEntry, price: t.entry, color: Palette.blue, dashed: true, draggable: true)) }
+            if !t.isMarket { lines.append(ChartLine(id: .ticketEntry, price: t.entry, color: Palette.blue, dashed: true, draggable: true, closable: true)) }
+            if let r = riskResult, r.estLiquidationPx > 0 {
+                lines.append(ChartLine(id: .ticketLiq, price: r.estLiquidationPx, color: Palette.red.withAlphaComponent(0.7), dashed: true, draggable: false))
+            }
         }
         for o in coinOrders {
             let px = pendingOrderPrices[o.oid] ?? o.displayPx
             let color: NSColor = o.isTrigger ? (o.tpsl == .tp ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.orange : Palette.blue)
-            lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: !o.isTrigger, draggable: true))
+            lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: !o.isTrigger, draggable: true, closable: true))
         }
         if let pos = position {
-            lines.append(ChartLine(id: .position, price: pos.entryPx, color: pos.isLong ? Palette.blue : Palette.accent, dashed: false, draggable: false, emphasized: true))
+            lines.append(ChartLine(id: .position, price: pos.entryPx, color: pos.isLong ? Palette.blue : Palette.accent, dashed: false, draggable: false, emphasized: true, closable: true))
             if let be = breakEven { lines.append(ChartLine(id: .breakEven, price: be, color: Palette.muted, dashed: true, draggable: false)) }
             if let liq = pos.liquidationPx, liq > 0 { lines.append(ChartLine(id: .liquidation, price: liq, color: Palette.red.withAlphaComponent(0.8), dashed: true, draggable: false)) }
         }
@@ -842,10 +1047,16 @@ final class AppState: ObservableObject {
             return "LIMIT \(r.isLong ? "LONG" : "SHORT")  \(f.size(r.size, coin: coin, decimals: szDecimals))  ·  \(r.leverage)×"
         case .ticketSL:
             guard let r = riskResult else { return "SL \(Fmt.price(px))" }
-            return "SL  \(f.signedUsd(-r.riskUsd))  (−\(Fmt.number(riskPercent, decimals: 2))%)"
-        case .ticketTP:
-            guard let r = riskResult, let profit = r.potentialProfit else { return "TP \(Fmt.price(px))" }
-            return "TP  \(f.signedUsd(profit))  (\(Fmt.percent(profit / sizingEquity, decimals: 1)))  ·  \(Fmt.number(r.rewardRisk ?? 0, decimals: 1))R"
+            return "SL  \(f.signedUsd(-r.riskUsd))  (−\(Fmt.number(r.riskPercentActual, decimals: 2))%)"
+        case .ticketTP(let i):
+            guard let t = ticket, t.tps.indices.contains(i), let r = riskResult else { return "TP \(Fmt.price(px))" }
+            let lvl = t.tps[i]
+            let qty = r.size * lvl.pct / 100
+            let profit = qty * abs(px - t.entry) - qty * feeRates.maker * (t.entry + px)
+            let rr = abs(px - t.entry) / max(abs(t.entry - t.stopLoss), 1e-12)
+            return "TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))  ·  \(Fmt.number(rr, decimals: 1))R"
+        case .ticketLiq:
+            return "LIQ ≈ \(Fmt.price(px))"
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
             if let pos = position, o.reduceOnly || o.isTrigger {
@@ -878,7 +1089,8 @@ final class AppState: ObservableObject {
         switch id {
         case .ticketEntry: ticket?.entry = px
         case .ticketSL: ticket?.stopLoss = px
-        case .ticketTP: ticket?.takeProfit = px
+        case .ticketTP(let i): if ticket?.tps.indices.contains(i) == true { ticket?.tps[i].price = px }
+        case .ticketLiq: break
         case .order(let oid):
             pendingOrderPrices[oid] = px
             if ended { Task { await moveOrder(oid: oid, to: px) } }
@@ -961,6 +1173,40 @@ final class AppState: ObservableObject {
         }
     }
 }
+// MARK: - Sleep / wake
+
+extension AppState {
+    /// After sleep or a network change the socket can be dead without an error: reconnect and reload.
+    func observeSystem() {
+        let ws = NSWorkspace.shared.notificationCenter
+        ws.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.wakeUp(reason: "wake") }
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let last = self.candles.last else { return }
+                // The newest candle should be at most one candle old.
+                let age = Date().timeIntervalSince1970 * 1000 - Double(last.time)
+                if age > Double(self.timeframe.milliseconds) * 2 { self.wakeUp(reason: "stale") }
+            }
+        }
+    }
+
+    func wakeUp(reason: String) {
+        reconnectStream()
+        Task { await refreshAll() }
+    }
+
+    /// Manual refresh (button / ⌘R): reconnect live data and reload everything.
+    func refreshEverything() {
+        reconnectStream()
+        Task {
+            await refreshAll()
+            toast("Ververst", .info)
+        }
+    }
+}
+
 // MARK: - Trade results, notifications, chart markers
 
 extension AppState {
@@ -1021,6 +1267,9 @@ extension AppState {
                 toast("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))", .info)
             } else {
                 let label = analysis.open[c]?.executions.last(where: { $0.oid == first.oid })?.label ?? "Deel"
+                if kind == .takeProfit && breakEvenAfterTP.contains(c) {
+                    Task { await self.refreshAccount(); await self.moveStopToBreakEven(coin: c) }
+                }
                 notify(kind == .takeProfit ? .takeProfit : .positionClosed, "\(label) \(c) gevuld", "\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
                 toast("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))", realized >= 0 ? .success : .info)
             }

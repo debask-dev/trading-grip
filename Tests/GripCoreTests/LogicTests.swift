@@ -29,6 +29,22 @@ final class RiskTests: XCTestCase {
         XCTAssertFalse(r.warnings.isEmpty)
     }
 
+    func testSizeOverrideAndLadder() throws {
+        var input = RiskInput(accountValue: 10_000, riskPercent: 1, entry: 100, stopLoss: 98, takeProfit: nil, maxLeverage: 20, szDecimals: 2, takerFeeRate: 0, entryFeeRate: 0)
+        input.sizeOverride = 75                                   // 75 × $2 = $150 → 1.5% (over the 1% max)
+        input.leverageOverride = 3
+        input.takeProfits = [TPTarget(price: 104, fraction: 0.5), TPTarget(price: 110, fraction: 0.5)]
+        let r = try XCTUnwrap(RiskCalculator.calculate(input))
+        XCTAssertEqual(r.size, 75)
+        XCTAssertEqual(r.riskUsd, 150, accuracy: 1e-9)
+        XCTAssertEqual(r.riskPercentActual, 1.5, accuracy: 1e-9)
+        XCTAssertTrue(r.warnings.contains { $0.contains("meer dan je max") })
+        XCTAssertEqual(r.leverage, 3)
+        XCTAssertEqual(r.minLeverage, 1)
+        XCTAssertEqual(try XCTUnwrap(r.rewardRisk), 3.5, accuracy: 1e-9)   // avg move 7 / risk 2
+        XCTAssertEqual(try XCTUnwrap(r.potentialProfit), 75 * 0.5 * 4 + 75 * 0.5 * 10, accuracy: 1e-9)
+    }
+
     func testPriceRounding() {
         XCTAssertEqual(HLFormat.roundPrice(97_253.7, szDecimals: 5), 97_254)
         XCTAssertEqual(HLFormat.roundPrice(3_456.789, szDecimals: 4), 3_456.8)

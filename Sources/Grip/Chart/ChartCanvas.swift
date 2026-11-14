@@ -33,6 +33,15 @@ final class ChartCanvas: NSView {
     var focus: ChartFocus? { didSet { if focus?.token != oldValue?.token { pendingFocus = focus; applyFocusIfPossible() } } }
     private var pendingFocus: ChartFocus?
     private var hoveredMarker: String?
+    private var hoveredTrade: String?
+    private var lineCloseRects: [LineID: NSRect] = [:]
+    var onTradeSelect: (@MainActor (String?) -> Void)?
+    var onLineClose: (@MainActor (LineID) -> Void)?
+    /// Right-click on empty chart: actions at that price.
+    var priceMenuItems: (@MainActor (Double) -> [(String, @MainActor () -> Void)])?
+
+    /// Price range currently on screen (for placing a new order ticket sensibly).
+    var visiblePriceRange: (lo: Double, hi: Double) { range }
     var resetKey: String = "" { didSet { if oldValue != resetKey { resetView() } } }
 
     // MARK: Callbacks
@@ -79,7 +88,7 @@ final class ChartCanvas: NSView {
 
     // MARK: Interaction
     private enum Hover: Equatable {
-        case line(LineID), closeHandle, trendline(UUID), endpoint(UUID, Bool), priceAxis, timeAxis, autoButton
+        case line(LineID), lineClose(LineID), closeHandle, trendline(UUID), endpoint(UUID, Bool), priceAxis, timeAxis, autoButton, trade(String)
     }
     private enum Drag {
         case none
@@ -317,6 +326,7 @@ final class ChartCanvas: NSView {
         computeRange()
         easeRange()
         labelRects = [:]
+        lineCloseRects = [:]
         closeHandleRect = nil
         Palette.chartBg.setFill()
         bounds.fill()
@@ -569,6 +579,7 @@ final class ChartCanvas: NSView {
     }
 
     private func drawLastPrice() {
+        if let c = candles.last?.close, c > 0 { lastPrice = c }
         guard lastPrice > 0 else { return }
         let yy = align(y(lastPrice)) + 0.5 / pixelRatio
         guard yy >= plot.minY, yy <= plot.maxY else { return }
@@ -607,7 +618,8 @@ final class ChartCanvas: NSView {
             let font = NSFont.systemFont(ofSize: 11.5, weight: .semibold)
             let size = (label as NSString).size(withAttributes: [.font: font])
             let gripW: CGFloat = line.draggable ? 14 : 0
-            let w = size.width + 20 + gripW
+            let closeW: CGFloat = line.closable ? 20 : 0
+            let w = size.width + 20 + gripW + closeW
             let rect = NSRect(x: plot.maxX - 14 - w, y: yy - 11.5, width: w, height: 23)
             let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
             if line.emphasized || hot {
@@ -623,21 +635,21 @@ final class ChartCanvas: NSView {
             }
             text(label, at: CGPoint(x: rect.minX + 10 + gripW, y: yy), font: font, color: fg, align: .left)
             if line.draggable { labelRects[line.id] = rect }
-
-            // Drag-to-close handle on the position line
-            if line.id == .position && !offscreen {
-                let h = NSRect(x: rect.minX - 30, y: yy - 12, width: 24, height: 24)
-                let hp = NSBezierPath(roundedRect: h, xRadius: 6, yRadius: 6)
-                let handleHot = hover == .closeHandle || isDraggingClose
-                (handleHot ? (Palette.orange.highlight(withLevel: 0.2) ?? Palette.orange) : Palette.orange).setFill()
-                hp.fill()
+            if line.closable {
+                let cr = NSRect(x: rect.maxX - 21, y: yy - 9, width: 18, height: 18)
+                if hover == .lineClose(line.id) {
+                    fg.withAlphaComponent(0.2).setFill()
+                    NSBezierPath(roundedRect: cr, xRadius: 4, yRadius: 4).fill()
+                }
                 let xp = NSBezierPath()
-                xp.move(to: CGPoint(x: h.minX + 8, y: h.minY + 8)); xp.line(to: CGPoint(x: h.maxX - 8, y: h.maxY - 8))
-                xp.move(to: CGPoint(x: h.maxX - 8, y: h.minY + 8)); xp.line(to: CGPoint(x: h.minX + 8, y: h.maxY - 8))
-                xp.lineWidth = 2; xp.lineCapStyle = .round
-                NSColor(hex: 0x1B1203).setStroke(); xp.stroke()
-                closeHandleRect = h
+                xp.move(to: CGPoint(x: cr.minX + 5.5, y: cr.minY + 5.5)); xp.line(to: CGPoint(x: cr.maxX - 5.5, y: cr.maxY - 5.5))
+                xp.move(to: CGPoint(x: cr.maxX - 5.5, y: cr.minY + 5.5)); xp.line(to: CGPoint(x: cr.minX + 5.5, y: cr.maxY - 5.5))
+                xp.lineWidth = 1.6; xp.lineCapStyle = .round
+                fg.setStroke(); xp.stroke()
+                lineCloseRects[line.id] = cr
+                if !line.draggable { labelRects[line.id] = rect }
             }
+
         }
 
         // Ghost line while dragging the close handle
@@ -712,7 +724,8 @@ final class ChartCanvas: NSView {
         put(Fmt.percent(change), num, valueColor, gap: 12)
         if c.volume > 0 {
             put("Vol", key, Palette.muted, gap: 3)
-            put(compact(c.volume), num, Palette.text, gap: 0)
+            put("\(compact(c.volume)) \(coin)", num, Palette.text, gap: 6)
+            put("$" + compact(c.volume * (c.high + c.low + c.close) / 3), num, Palette.muted, gap: 0)
         }
     }
 
@@ -732,7 +745,7 @@ final class ChartCanvas: NSView {
         for m in markers where m.time >= lo - timeframe.milliseconds && m.time <= hi {
             guard let p = markerPoint(m) else { continue }
             let col = m.isBuy ? Palette.green : Palette.red
-            let hot = hoveredMarker == m.id || highlightTradeID == m.tradeID
+            let hot = hoveredMarker == m.id || highlightTradeID == m.tradeID || hoveredTrade == m.tradeID
             // tick exactly at the fill price
             col.setFill()
             let w = max(6, spacing * 0.9)
@@ -758,7 +771,7 @@ final class ChartCanvas: NSView {
             let b = CGPoint(x: x(index: index(time: l.t1)), y: y(l.p1))
             guard max(a.x, b.x) >= plot.minX, min(a.x, b.x) <= plot.maxX else { continue }
             let col = l.isWin ? Palette.green : Palette.red
-            let hot = highlightTradeID == l.id
+            let hot = highlightTradeID == l.id || hoveredTrade == l.id
             let path = NSBezierPath()
             path.move(to: a); path.line(to: b)
             path.lineWidth = hot ? 2 : 1.2
@@ -769,6 +782,8 @@ final class ChartCanvas: NSView {
                 col.withAlphaComponent(0.08).setFill()
                 NSRect(x: min(a.x, b.x), y: plot.minY, width: abs(b.x - a.x), height: plot.height).fill()
             }
+            // The result shows only while the trade is hovered or selected (keeps the chart calm).
+            guard hot else { continue }
             let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
             let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 10)
             let w = (l.label as NSString).size(withAttributes: [.font: font]).width + 12
@@ -805,6 +820,15 @@ final class ChartCanvas: NSView {
             text(line, at: CGPoint(x: r.minX + 10, y: r.minY + 14 + CGFloat(i) * 16), font: i == 0 ? .systemFont(ofSize: 11.5, weight: .semibold) : font,
                  color: i == 0 ? Palette.text : Palette.muted, align: .left)
         }
+    }
+
+    private func tradeLinkAt(_ p: CGPoint) -> String? {
+        for l in tradeLinks {
+            let a = CGPoint(x: x(index: index(time: l.t0)), y: y(l.p0))
+            let b = CGPoint(x: x(index: index(time: l.t1)), y: y(l.p1))
+            if distance(p, toSegment: a, b) < 5 { return l.id }
+        }
+        return nil
     }
 
     private func markerAt(_ p: CGPoint) -> String? {
@@ -900,8 +924,12 @@ final class ChartCanvas: NSView {
         if autoButtonRect.insetBy(dx: -2, dy: -2).contains(p) { return .autoButton }
         if p.x > plot.maxX && p.y < plot.maxY { return .priceAxis }
         if p.y > plot.maxY && p.x < plot.maxX { return .timeAxis }
-        if let r = closeHandleRect, r.insetBy(dx: -4, dy: -4).contains(p) { return .closeHandle }
-        for (id, r) in labelRects where r.insetBy(dx: -2, dy: -3).contains(p) { return .line(id) }
+        for (id, r) in lineCloseRects where r.insetBy(dx: -2, dy: -2).contains(p) { return .lineClose(id) }
+        for (id, r) in labelRects where r.insetBy(dx: -2, dy: -3).contains(p) {
+            if lines.first(where: { $0.id == id })?.draggable == true { return .line(id) }
+        }
+        if let m = markerAt(p), let t = markers.first(where: { $0.id == m })?.tradeID { return .trade(t) }
+        if let t = tradeLinkAt(p) { return .trade(t) }
         // Trendline endpoints (selected first), then bodies
         let ordered = trendlines.filter { $0.id == selectedTrendline } + trendlines.filter { $0.id != selectedTrendline }
         for l in ordered {
@@ -948,6 +976,7 @@ final class ChartCanvas: NSView {
         if tool != .cursor { NSCursor.crosshair.set(); return }
         switch hover {
         case .line?, .closeHandle?: NSCursor.openHand.set()
+        case .lineClose?, .trade?: NSCursor.pointingHand.set()
         case .endpoint?, .trendline?, .autoButton?: NSCursor.pointingHand.set()
         case .priceAxis?: NSCursor.resizeUpDown.set()
         case .timeAxis?: NSCursor.resizeLeftRight.set()
@@ -959,6 +988,7 @@ final class ChartCanvas: NSView {
         mouse = location(e)
         commandDown = e.modifierFlags.contains(.command)
         hoveredMarker = plot.contains(mouse!) ? markerAt(mouse!) : nil
+        hoveredTrade = hoveredMarker.flatMap { id in markers.first { $0.id == id }?.tradeID } ?? (plot.contains(mouse!) ? tradeLinkAt(mouse!) : nil)
         hover = tool != .cursor ? nil : hitTarget(mouse!)
         updateSnapMarker()
         updateCursor()
@@ -1042,6 +1072,10 @@ final class ChartCanvas: NSView {
         }
 
         switch hitTarget(p) {
+        case .lineClose(let id)?:
+            onLineClose?(id)
+        case .trade(let t)?:
+            onTradeSelect?(highlightTradeID == t ? nil : t)
         case .autoButton?:
             autoScale.toggle()
             if !autoScale { manualRange = range } else { shownRange = range }
@@ -1065,6 +1099,7 @@ final class ChartCanvas: NSView {
             drag = .timeAxis(startX: p.x, startSpacing: vp.barSpacing)
         case nil:
             if selectedTrendline != nil { onTrendlineSelect?(nil) }
+            if highlightTradeID != nil { onTradeSelect?(nil) }
             kinetic = KineticScroll()
             kinetic.add(position: Double(p.x), timeMs: e.timestamp * 1000)
             drag = .pan(startX: p.x, startOffset: vp.rightOffset, startY: p.y, startRange: range)
@@ -1291,6 +1326,7 @@ final class ChartCanvas: NSView {
             pendingTrendStart = nil
             trendDraft = nil
             if !typed.isEmpty { typed = ""; needsDisplay = true; return }
+            if highlightTradeID != nil { onTradeSelect?(nil) }
             if case .none = measure {
                 if tool != .cursor { onToolFinished?() } else if selectedTrendline != nil { onTrendlineSelect?(nil) }
             } else {
@@ -1320,7 +1356,14 @@ final class ChartCanvas: NSView {
         case .line(.order(let oid))?:
             menu.addItem(ClosureMenuItem(title: "Annuleer order") { [weak self] in self?.onCancelOrder?(oid) })
         default:
-            return nil
+            guard plot.contains(p) || (p.x > plot.maxX && p.y >= plot.minY && p.y <= plot.maxY),
+                  let items = priceMenuItems?(price(y: p.y)), !items.isEmpty else { return nil }
+            let header = NSMenuItem(title: "@ " + Fmt.price(price(y: p.y)), action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for (title, action) in items {
+                if title == "-" { menu.addItem(.separator()) } else { menu.addItem(ClosureMenuItem(title: title, handler: action)) }
+            }
         }
         return menu
     }
@@ -1336,6 +1379,20 @@ final class ClosureMenuItem: NSMenuItem {
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func run() { MainActor.assumeIsolated { handler() } }
+}
+#endif
+
+#if os(macOS)
+// MARK: - Screenshot
+extension ChartCanvas {
+    /// The chart as an image (what you see, at screen resolution).
+    func snapshotImage() -> NSImage? {
+        guard let rep = bitmapImageRepForCachingDisplay(in: bounds) else { return nil }
+        cacheDisplay(in: bounds, to: rep)
+        let img = NSImage(size: bounds.size)
+        img.addRepresentation(rep)
+        return img
+    }
 }
 #endif
 
