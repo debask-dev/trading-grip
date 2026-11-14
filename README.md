@@ -5,6 +5,7 @@
 ![Grip](Resources/AppIcon.png)
 
 🎬 **Demo:** [docs/Grip-app-demo.mp4](docs/Grip-app-demo.mp4), een opname van de echte app (oefenmodus, live koersen), automatisch gemaakt op een Mac van GitHub Actions.
+🎬 **Nieuwe chartfuncties:** [docs/Grip-chart-features.mp4](docs/Grip-chart-features.mp4) (zoomen, momentum, OHLC, aftelklok, meten, lijn- en candle-stijlen).
 
 ## Wat kan Grip
 
