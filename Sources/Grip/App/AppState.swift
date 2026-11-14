@@ -15,7 +15,7 @@ enum MainTab: String, CaseIterable, Identifiable {
     }
 }
 
-enum ChartTool: Equatable { case cursor, trendline, horizontal }
+enum ChartTool: Equatable { case cursor, trendline, horizontal, measure }
 
 /// One take-profit of the ladder in the ticket.
 struct TPLevel: Equatable, Identifiable {
@@ -213,6 +213,8 @@ final class AppState: ObservableObject {
     private var midsFlushScheduled = false
     private var pendingCandle: (coin: String, tf: Timeframe, candle: Candle)?
     private var candleFlushScheduled = false
+    private var tickPublishScheduled = false
+    private var latestTick: Candle?
     // Caches so a redraw does not recompute everything
     var markerCacheKey = ""
     var markerCache: [ChartMarker] = []
@@ -532,22 +534,37 @@ final class AppState: ObservableObject {
         loadingCandles = false
     }
 
-    /// Every trade sends a candle update; draw at most ~8 times a second.
+    /// Every trade sends a candle update. The chart gets it directly (~8×/s, no SwiftUI involved);
+    /// the rest of the window (header price, labels) at most twice a second.
     private func queueCandle(coin c: String, tf: Timeframe, candle: Candle) {
+        guard c == coin, tf == timeframe, !loadingCandles else { return }
         pendingCandle = (c, tf, candle)
         guard !candleFlushScheduled else { return }
         candleFlushScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
             guard let self else { return }
             self.candleFlushScheduled = false
-            if let p = self.pendingCandle { self.pendingCandle = nil; self.applyCandle(coin: p.coin, tf: p.tf, candle: p.candle) }
+            guard let p = self.pendingCandle, p.coin == self.coin, p.tf == self.timeframe else { return }
+            self.pendingCandle = nil
+            self.chartCanvas?.applyLive(p.candle)
+            let isNew = p.candle.time > (self.candles.last?.time ?? 0)
+            if isNew || self.candles.isEmpty { self.applyCandle(coin: p.coin, tf: p.tf, candle: p.candle); return }
+            self.latestTick = p.candle
+            if !self.tickPublishScheduled {
+                self.tickPublishScheduled = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self else { return }
+                    self.tickPublishScheduled = false
+                    if let t = self.latestTick { self.latestTick = nil; self.applyCandle(coin: self.coin, tf: self.timeframe, candle: t) }
+                }
+            }
         }
     }
 
     private func applyCandle(coin c: String, tf: Timeframe, candle: Candle) {
         guard c == coin, tf == timeframe, !loadingCandles else { return }
         if let last = candles.last {
-            if last.time == candle.time { candles[candles.count - 1] = candle }
+            if last.time == candle.time { if last != candle { candles[candles.count - 1] = candle } }
             else if candle.time > last.time { candles.append(candle) }
         } else {
             candles = [candle]
@@ -579,7 +596,7 @@ final class AppState: ObservableObject {
                 orderKinds[o.oid] = o.isTrigger ? (o.tpsl == .tp ? .takeProfit : .stopLoss) : (o.reduceOnly ? .takeProfit : .limit)
             }
             previousOrders = state.openOrders
-            account = state
+            if account != state { account = state }
             await reconcileManaged()
             accountError = nil
             // Drop optimistic drag prices once the exchange reflects them (or the order is gone).
@@ -1001,6 +1018,22 @@ final class AppState: ObservableObject {
         trendlines.removeAll { $0.id == id }
         if selectedTrendline == id { selectedTrendline = nil }
         saveTrendlines()
+    }
+
+    /// ⌥H / ⌥V: a horizontal or vertical line where the mouse is.
+    func addLineAtCursor(vertical: Bool) {
+        guard let p = chartCanvas?.cursorPoint() else { toast("Beweeg de muis over de chart en druk dan nog eens.", .info); return }
+        if vertical {
+            var ap = lineAppearance
+            ap.extendLeft = true
+            ap.extendRight = true
+            let line = Trendline(coin: coin, a: p, b: ChartPoint(time: p.time, price: p.price * 1.001), appearance: ap)
+            trendlines.append(line)
+            selectedTrendline = line.id
+            saveTrendlines()
+        } else {
+            addHorizontal(p)
+        }
     }
 
     /// Horizontal line across the whole chart at a price.

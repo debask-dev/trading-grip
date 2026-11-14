@@ -263,7 +263,7 @@ final class DemoDirector {
         caption("Lijn aanpassen: kleur, dikte, stijl en verlengen de toekomst in")
         try await click(anchor: "lt-#FFB547", fallback: { self.state.styleSelectedLine { $0.color = "#FFB547" } }, done: { self.state.selectedLine?.color == "#FFB547" })
         try await sleep(0.6)
-        try await click(anchor: "lt-width-3", fallback: { self.state.styleSelectedLine { $0.width = 3 } }, done: { self.state.selectedLine?.width == 3 })
+        try await click(anchor: "lt-width-3.0", fallback: { self.state.styleSelectedLine { $0.width = 3 } }, done: { self.state.selectedLine?.width == 3 })
         try await sleep(0.6)
         try await click(anchor: "lt-dash-dashed", fallback: { self.state.styleSelectedLine { $0.dash = .dashed } }, done: { self.state.selectedLine?.dash == .dashed })
         try await sleep(0.6)

@@ -219,40 +219,36 @@ struct CoinPicker: View {
     }
 }
 
-/// Last hour + 24h at a glance, above the chart.
-struct MarketStatsStrip: View {
+/// Market info in the header: label above value, like TradingView's symbol bar. Drops items when narrow.
+struct MarketStats: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            row(compact: false)
-            row(compact: true)
+            row(level: 0)
+            row(level: 1)
+            row(level: 2)
+            EmptyView()
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: 26)
-        .background(Theme.panel.opacity(0.7))
     }
 
-    private func row(compact: Bool) -> some View {
+    private func row(level: Int) -> some View {
         let ctx = state.contexts[state.coin]
         let h = state.hourStats
-        return HStack(spacing: compact ? 12 : 18) {
+        return HStack(spacing: 14) {
             if let h {
                 stat("1u", Fmt.percent(h.change, decimals: 2), Theme.pnl(h.change))
-                if !compact { stat("1u bereik", "\(Fmt.price(h.low)) – \(Fmt.price(h.high))") }
-                stat("1u vol", compact ? "$\(Fmt.compact(h.volumeUsd))" : "\(Fmt.compact(h.volume)) \(state.coin) · $\(Fmt.compact(h.volumeUsd))")
-            } else {
-                stat("1u", "…")
+                    .help("Laatste uur: \(Fmt.price(h.low)) – \(Fmt.price(h.high))")
+                stat("Vol 1u", "$" + Fmt.compact(h.volumeUsd))
+                    .help("\(Fmt.compact(h.volume)) \(state.coin) in het laatste uur")
             }
-            Divider().frame(height: 14)
             if let ctx {
-                stat("24u vol", "$" + Fmt.compact(ctx.dayVolume))
-                stat("Funding", Fmt.number(ctx.funding * 100, decimals: 4) + "%/u", ctx.funding >= 0 ? Theme.muted : Theme.green)
-                    .help("Funding per uur. Positief: longs betalen shorts.")
-                if ctx.openInterest > 0 && !compact {
-                    stat("Open interest", "$" + Fmt.compact(ctx.openInterest * ctx.markPx))
+                if level < 2 { stat("Vol 24u", "$" + Fmt.compact(ctx.dayVolume)) }
+                stat("Funding", Fmt.number(ctx.funding * 100, decimals: 4) + "%", ctx.funding >= 0 ? Theme.text : Theme.green)
+                    .help("Funding per uur. Positief: longs betalen shorts. Negatief: shorts betalen longs.")
+                if level < 1 && ctx.openInterest > 0 {
+                    stat("Open int.", "$" + Fmt.compact(ctx.openInterest * ctx.markPx))
+                        .help("Waarde van alle open posities op deze markt")
                 }
             }
         }
@@ -260,11 +256,10 @@ struct MarketStatsStrip: View {
     }
 
     private func stat(_ k: String, _ v: String, _ color: Color = Theme.text) -> some View {
-        HStack(spacing: 5) {
-            Text(k).foregroundStyle(Theme.dim)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(k).font(.system(size: 9.5)).foregroundStyle(Theme.dim)
             Text(v).mono(11).foregroundStyle(color)
         }
-        .lineLimit(1)
         .fixedSize()
     }
 }
@@ -305,8 +300,6 @@ struct TradeScreen: View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
                 ChartHeader()
-                Divider().overlay(Theme.line)
-                MarketStatsStrip()
                 Divider().overlay(Theme.line)
                 ChartView(state: state)
                     .overlay(alignment: .top) {
@@ -354,18 +347,16 @@ struct ChartHeader: View {
 
             HStack(spacing: 4) {
                 ToolButton(icon: "cursorarrow", active: state.tool == .cursor, help: "Aanwijzer (Esc)") { state.tool = .cursor }
-                ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: "Trendlijn (⌥T, nog eens ⌥T = terug)") {
+                ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: "Trendlijn (⌥T) · ⌘ = snap aan/uit") {
                     state.toggleTool(.trendline)
                 }
                 .demoAnchor("tool-trend")
-                ToolButton(icon: "minus", active: state.tool == .horizontal, help: "Horizontale lijn (⌥H)") {
+                ToolButton(icon: "minus", active: state.tool == .horizontal, help: "Horizontale lijn: klik op een prijs · ⌥H = direct op de cursor") {
                     state.toggleTool(.horizontal)
                 }
-                ToolButton(icon: NSImage(systemSymbolName: "magnet", accessibilityDescription: nil) != nil ? "magnet" : "scope",
-                           active: state.magnet, help: "Magneet: snap op open/high/low/close (⌥M · ⌘ ingedrukt = tijdelijk omzetten)") {
-                    state.magnet.toggle()
+                ToolButton(icon: "ruler", active: state.tool == .measure, help: "Meten: klik begin en eind · of ⇧-klik in de chart") {
+                    state.toggleTool(.measure)
                 }
-                .demoAnchor("tool-magnet")
                 if !state.coinTrendlines.isEmpty {
                     Menu {
                         Button("Wis alle lijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }
@@ -378,22 +369,8 @@ struct ChartHeader: View {
                 }
             }
 
-            Group {
-                switch state.tool {
-                case .trendline:
-                    Text("Klik en sleep om te tekenen · **⌘** = snap aan/uit · Esc = stoppen").foregroundStyle(Theme.orange)
-                case .horizontal:
-                    Text("Klik op een prijs · **⌘** = snap aan/uit · Esc = stoppen").foregroundStyle(Theme.orange)
-                case .cursor:
-                    if state.selectedTrendline != nil {
-                        Text("Sleep de uiteinden om aan te passen · ⌫ verwijdert").foregroundStyle(Theme.muted)
-                    } else {
-                        Text("⇧-klik = meten · ⌘/ = sneltoetsen").foregroundStyle(Theme.dim)
-                    }
-                }
-            }
-            .font(.system(size: 11.5))
-            .lineLimit(1)
+            Divider().frame(height: 22)
+            MarketStats()
 
             Spacer()
             if state.loadingCandles { ProgressView().controlSize(.small) }
@@ -457,7 +434,7 @@ struct ShortcutsView: View {
         ]),
         ("Tekenen & meten", [
             ("⌥T", "Trendlijn aan/uit"),
-            ("⌥H", "Horizontale lijn aan/uit"),
+            ("⌥H  /  ⌥V", "Horizontale / verticale lijn op de cursor"),
             ("⌥M", "Magneet aan/uit"),
             ("⌘ ingedrukt", "Snap tijdelijk omzetten"),
             ("⇧ + klik, klik", "Meten: %, candles, tijd"),
@@ -466,6 +443,8 @@ struct ShortcutsView: View {
         ]),
         ("Traden", [
             ("⌥L  /  ⌥S", "Nieuwe long / short"),
+            ("⌥B  /  ⌥N  /  ⌥X", "Snel: market long / short / sluiten"),
+            ("⇧⌘S", "Screenshot van de chart"),
             ("⌘↩", "Order plaatsen"),
             ("⇧⌘H", "Bedragen verbergen"),
             ("⌥⌘1 / 2 / 3", "Traden / Historie / Portfolio"),

@@ -73,8 +73,11 @@ struct GripCommands: Commands {
             Divider()
             Button(state.tool == .trendline ? "Trendlijn stoppen" : "Trendlijn") { state.toggleTool(.trendline) }
                 .keyboardShortcut("t", modifiers: .option)
-            Button(state.tool == .horizontal ? "Horizontale lijn stoppen" : "Horizontale lijn") { state.toggleTool(.horizontal) }
+            Button("Horizontale lijn op cursor") { state.addLineAtCursor(vertical: false) }
                 .keyboardShortcut("h", modifiers: .option)
+            Button("Verticale lijn op cursor") { state.addLineAtCursor(vertical: true) }
+                .keyboardShortcut("v", modifiers: .option)
+            Button(state.tool == .measure ? "Meten stoppen" : "Meten") { state.toggleTool(.measure) }
             Button(state.magnet ? "Magneet uit" : "Magneet aan") { state.magnet.toggle() }
                 .keyboardShortcut("m", modifiers: .option)
             Button("Geselecteerde lijn verwijderen") { state.deleteSelectedTrendline() }

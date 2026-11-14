@@ -44,11 +44,11 @@ struct LineToolbar: View {
             }
             divider
             HStack(spacing: 2) {
-                ForEach([1.0, 2.0, 3.0, 4.0], id: \.self) { w in
-                    toggleButton(active: line.width == w, help: "Dikte \(Int(w))") {
-                        Capsule().fill(Theme.text).frame(width: 16, height: w)
+                ForEach([0.5, 1.0, 2.0, 3.0, 4.0], id: \.self) { w in
+                    toggleButton(active: line.width == w, help: "Dikte \(Fmt.number(w, decimals: w < 1 ? 1 : 0)) pt") {
+                        Capsule().fill(Theme.text.opacity(w < 1 ? 0.8 : 1)).frame(width: 16, height: max(w, 0.75))
                     } action: { state.styleSelectedLine { $0.width = w } }
-                    .demoAnchor("lt-width-\(Int(w))")
+                    .demoAnchor("lt-width-\(w)")
                 }
             }
             divider
@@ -172,7 +172,7 @@ struct ChartSettingsView: View {
                     ColorPicker("", selection: hexBinding({ state.lineAppearance.color }, { state.lineAppearance.color = $0 }), supportsOpacity: true).labelsHidden()
                 }
                 Picker("Dikte", selection: $state.lineAppearance.width) {
-                    ForEach([1.0, 2.0, 3.0, 4.0], id: \.self) { Text("\(Int($0)) pt").tag($0) }
+                    ForEach([0.5, 1.0, 2.0, 3.0, 4.0], id: \.self) { Text("\(Fmt.number($0, decimals: $0 < 1 ? 1 : 0)) pt").tag($0) }
                 }
                 Picker("Stijl", selection: $state.lineAppearance.dash) {
                     Text("Doorgetrokken").tag(LineDash.solid)

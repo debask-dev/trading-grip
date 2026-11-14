@@ -14,7 +14,13 @@ import GripCore
 /// Measure: ⇧ + click, move, click (or ⇧ + drag). Esc or a click clears it.
 final class ChartCanvas: NSView {
     // MARK: Inputs
-    var candles: [Candle] = [] { didSet { if pendingFocus != nil, oldValue.count != candles.count { applyFocusIfPossible() } } }
+    var candles: [Candle] = [] {
+        didSet {
+            // Keep the newest live tick when SwiftUI hands over a slightly older copy.
+            if let l = liveLast, let last = candles.last, l.time == last.time, l != last { candles[candles.count - 1] = l }
+            if pendingFocus != nil, oldValue.count != candles.count { applyFocusIfPossible() }
+        }
+    }
     var timeframe: Timeframe = .m15
     var coin = ""
     var lastPrice: Double = 0
@@ -153,17 +159,54 @@ final class ChartCanvas: NSView {
 
     private let timeFormatter: DateFormatter = { let f = DateFormatter(); f.locale = Locale(identifier: "nl_NL"); return f }()
 
+    /// Transparent layer on top for what follows the mouse.
+    private let overlay = ChartOverlay()
+
     override init(frame: NSRect) {
         super.init(frame: frame)
-        wantsLayer = true
-        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        setUpLayers()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        setUpLayers()
+    }
+
+    private func setUpLayers() {
         wantsLayer = true
         layerContentsRedrawPolicy = .onSetNeedsDisplay
+        overlay.canvas = self
+        overlay.frame = bounds
+        overlay.autoresizingMask = [.width, .height]
+        addSubview(overlay)
     }
+
+    /// Called by the overlay layer.
+    fileprivate func drawOverlay() {
+        drawCrosshair()
+        drawLegend()
+        drawMarkerTooltip()
+        drawTyped()
+    }
+
+    /// Chart point under the mouse (for ⌥H / ⌥V).
+    func cursorPoint() -> ChartPoint? {
+        guard let m = mouse, plot.contains(m), !candles.isEmpty else { return nil }
+        return chartPoint(at: m, snap: snapActive)
+    }
+
+    /// Live price tick: update the newest candle without going through SwiftUI.
+    func applyLive(_ c: Candle) {
+        guard !candles.isEmpty else { return }
+        liveLast = c
+        if let last = candles.last, last.time == c.time {
+            if last != c { candles[candles.count - 1] = c; needsDisplay = true }
+        } else if c.time > (candles.last?.time ?? 0) {
+            candles.append(c)
+            needsDisplay = true
+        }
+    }
+    private(set) var liveLast: Candle?
 
     override var isOpaque: Bool { true }
     override var isFlipped: Bool { true }
@@ -187,6 +230,7 @@ final class ChartCanvas: NSView {
     }
 
     func resetView() {
+        liveLast = nil
         stopKinetic()
         zoomTarget = nil
         panRemaining = 0
@@ -312,6 +356,10 @@ final class ChartCanvas: NSView {
     /// The visible segment of a trendline, including extensions to the chart edges.
     private func segment(_ l: Trendline) -> (CGPoint, CGPoint) {
         var a = screen(l.a), b = screen(l.b)
+        // Vertical line (same time at both ends): full height when extended.
+        if abs(b.x - a.x) <= 0.01 && l.a.time == l.b.time && (l.extendLeft || l.extendRight) {
+            return (CGPoint(x: a.x, y: plot.minY), CGPoint(x: a.x, y: plot.maxY))
+        }
         guard abs(b.x - a.x) > 0.01 else { return (a, b) }
         let slope = (b.y - a.y) / (b.x - a.x)
         let (left, right) = a.x <= b.x ? (a, b) : (b, a)
@@ -347,11 +395,9 @@ final class ChartCanvas: NSView {
 
         drawLastPrice()
         drawOrderLines()
-        drawCrosshair()
-        drawLegend()
         drawAutoButton()
-        drawMarkerTooltip()
-        drawTyped()
+        // Crosshair, legend and tooltips live on a separate layer: moving the mouse only redraws that.
+        overlay.needsDisplay = true
 
         if candles.isEmpty {
             text(isLoading ? "Koersen laden…" : "Geen koersdata", at: CGPoint(x: plot.midX, y: plot.midY), font: .systemFont(ofSize: 14), color: Palette.dim, align: .center)
@@ -680,7 +726,8 @@ final class ChartCanvas: NSView {
         Palette.muted.withAlphaComponent(0.45).setStroke()
         hline(align(m.y) + 0.5 / pixelRatio, from: plot.minX, to: plot.maxX, width: 1, dash: [3, 3])
         // The vertical line sits on the hovered candle, like TradingView.
-        let idx = candles.isEmpty ? index(x: m.x) : min(max(index(x: m.x).rounded(), 0), Double(candles.count - 1))
+        // Snaps to a candle, also in the empty space right of the newest one (future slots).
+        let idx = candles.isEmpty ? index(x: m.x) : max(index(x: m.x).rounded(), 0)
         let cx = align(candles.isEmpty ? m.x : x(index: idx)) + 0.5 / pixelRatio
         let v = NSBezierPath()
         v.move(to: CGPoint(x: cx, y: plot.minY)); v.line(to: CGPoint(x: cx, y: plot.maxY))
@@ -987,6 +1034,7 @@ final class ChartCanvas: NSView {
     }
 
     override func mouseMoved(with e: NSEvent) {
+        let before = "\(String(describing: hover))|\(hoveredMarker ?? "")|\(hoveredTrade ?? "")|\(String(describing: snapMarker))"
         mouse = location(e)
         commandDown = e.modifierFlags.contains(.command)
         hoveredMarker = plot.contains(mouse!) ? markerAt(mouse!) : nil
@@ -994,7 +1042,10 @@ final class ChartCanvas: NSView {
         hover = tool != .cursor ? nil : hitTarget(mouse!)
         updateSnapMarker()
         updateCursor()
-        needsDisplay = true
+        let after = "\(String(describing: hover))|\(hoveredMarker ?? "")|\(hoveredTrade ?? "")|\(String(describing: snapMarker))"
+        var contentChanged = before != after || tool != .cursor || pendingTrendStart != nil
+        if case .active = measure { contentChanged = true }
+        if contentChanged { needsDisplay = true } else { overlay.needsDisplay = true }
     }
 
     override func mouseExited(with e: NSEvent) {
@@ -1026,12 +1077,13 @@ final class ChartCanvas: NSView {
             if p.y > plot.maxY && p.x < plot.maxX { vp.reset(); needsDisplay = true; return }
         }
 
-        // Measuring: ⇧ + click starts, the next click ends, a further click clears.
-        if tool == .cursor && plot.contains(p) {
-            let shift = e.modifierFlags.contains(.shift)
+        // Measuring: ⇧ + click (or the ruler tool) starts, the next click ends, a further click clears.
+        if (tool == .cursor || tool == .measure) && plot.contains(p) {
+            let shift = e.modifierFlags.contains(.shift) || tool == .measure
             switch measure {
             case .active(let a):
                 measure = .fixed(a, chartPoint(at: p, snap: snapActive))
+                if tool == .measure { onToolFinished?() }
                 needsDisplay = true
                 return
             case .fixed:
@@ -1381,6 +1433,23 @@ final class ClosureMenuItem: NSMenuItem {
     }
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func run() { MainActor.assumeIsolated { handler() } }
+}
+#endif
+
+#if os(macOS)
+/// Draws the crosshair, legend and tooltips on top of the chart. Does not take mouse events.
+final class ChartOverlay: NSView {
+    weak var canvas: ChartCanvas?
+    override var isFlipped: Bool { true }
+    override var isOpaque: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) { canvas?.drawOverlay() }
 }
 #endif
 
