@@ -177,12 +177,12 @@ struct OnboardingView: View {
 
     struct Step: View {
         var n: Int
-        var text: LocalizedStringKey
+        var text: String
         var body: some View {
             HStack(alignment: .top, spacing: 12) {
                 Text("\(n)").font(.system(size: 12, weight: .bold)).frame(width: 22, height: 22)
                     .background(Circle().fill(Theme.accent.opacity(0.3)))
-                Text(text).fixedSize(horizontal: false, vertical: true)
+                Text(LocalizedStringKey(text)).fixedSize(horizontal: false, vertical: true)   // keeps the **bold** markup
             }
         }
     }

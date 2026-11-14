@@ -273,7 +273,7 @@ struct AddAccountView: View {
 
                 StepSection(n: 4, title: T("API-wallet (om te kunnen handelen)")) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(T("Maak op Hyperliquid een API-wallet aan: **More → API → Generate**, kies een naam (bijv. Grip), klik **Authorize** en kopieer de **private key**. Een API-wallet kan handelen, maar **nooit geld opnemen**."))
+                        Text(LocalizedStringKey(T("Maak op Hyperliquid een API-wallet aan: **More → API → Generate**, kies een naam (bijv. Grip), klik **Authorize** en kopieer de **private key**. Een API-wallet kan handelen, maar **nooit geld opnemen**.")))
                             .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                         Link(destination: apiURL) {
                             Label(T("Open de API-pagina op Hyperliquid \(network.isMainnet ? "" : "Testnet")"), systemImage: "arrow.up.right.square")
