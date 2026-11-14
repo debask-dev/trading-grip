@@ -124,12 +124,74 @@ public struct OpenOrder: Equatable, Identifiable, Sendable {
     }
 }
 
+/// Hyperliquid account abstraction mode (`userAbstraction`).
+public enum AccountMode: String, Equatable, Sendable {
+    case standard          // "disabled": separate perps and spot balances
+    case unified           // "unifiedAccount": one balance per asset, kept on the spot side
+    case portfolioMargin   // "portfolioMargin"
+    case dexAbstraction    // legacy
+
+    public init(api raw: String) {
+        let s = raw.lowercased()
+        if s.contains("unified") { self = .unified }
+        else if s.contains("portfolio") { self = .portfolioMargin }
+        else if s.contains("dex") { self = .dexAbstraction }
+        else { self = .standard }
+    }
+
+    /// Unified and portfolio margin keep all balances in the spot clearinghouse state.
+    public var balancesOnSpot: Bool { self == .unified || self == .portfolioMargin }
+
+    public var label: String {
+        switch self {
+        case .standard: return "Standaard account"
+        case .unified: return "Unified account"
+        case .portfolioMargin: return "Portfolio margin"
+        case .dexAbstraction: return "DEX-abstractie"
+        }
+    }
+}
+
+public struct SpotBalance: Equatable, Sendable {
+    public var coin: String
+    public var token: Int
+    public var total: Double
+    public var hold: Double
+    public var usdValue: Double
+    public init(coin: String, token: Int, total: Double, hold: Double, usdValue: Double) {
+        self.coin = coin; self.token = token; self.total = total; self.hold = hold; self.usdValue = usdValue
+    }
+}
+
 public struct AccountState: Equatable, Sendable {
     public var accountValue: Double
     public var withdrawable: Double
     public var marginUsed: Double
     public var positions: [Position]
     public var openOrders: [OpenOrder]
+    public var mode: AccountMode = .standard
+    /// USD value of spot balances (in unified mode: the whole trading balance).
+    public var spotValue: Double = 0
+    public var spotBalances: [SpotBalance] = []
+    /// In standard mode only the perps balance; spot is separate.
+    public var perpsValue: Double = 0
+
+    /// Combines perps state with spot balances according to the account mode.
+    public static func combine(perps: AccountState, mode: AccountMode, spot: [SpotBalance]) -> AccountState {
+        var s = perps
+        s.mode = mode
+        s.spotBalances = spot.filter { $0.total != 0 }
+        s.spotValue = spot.reduce(0) { $0 + $1.usdValue }
+        s.perpsValue = perps.accountValue
+        if mode.balancesOnSpot {
+            // Unified / portfolio margin: the spot balances are the collateral; add open perp PnL.
+            let unrealized = perps.positions.reduce(0) { $0 + $1.unrealizedPnl }
+            s.accountValue = s.spotValue + unrealized
+            let usdcFree = spot.filter { $0.token == 0 }.reduce(0) { $0 + max(0, $1.total - $1.hold) }
+            s.withdrawable = max(0, usdcFree + min(0, unrealized))
+        }
+        return s
+    }
 
     public static let empty = AccountState(accountValue: 0, withdrawable: 0, marginUsed: 0, positions: [], openOrders: [])
 

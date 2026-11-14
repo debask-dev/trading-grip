@@ -164,6 +164,54 @@ public final class HLClient: @unchecked Sendable {
     // MARK: Account
 
     public func accountState(user: String) async throws -> AccountState {
+        async let perpsState = perpsAccountState(user: user)
+        async let modeRaw = try? info(["type": "userAbstraction", "user": user])
+        async let spotRaw = try? info(["type": "spotClearinghouseState", "user": user])
+        let (perps, m, spot) = try await (perpsState, modeRaw, spotRaw)
+        let mode = AccountMode(api: m as? String ?? "disabled")
+        let balances = await spotBalances(from: spot)
+        return AccountState.combine(perps: perps, mode: mode, spot: balances)
+    }
+
+    /// Spot balances valued in USD (stablecoins at 1, other tokens at their USDC spot price).
+    func spotBalances(from raw: Any?) async -> [SpotBalance] {
+        guard let obj = raw as? [String: Any], let arr = obj["balances"] as? [[String: Any]] else { return [] }
+        let stable: Set<String> = ["USDC", "USDT", "USDT0", "USDH", "USDE", "USDHL"]
+        var balances = arr.compactMap { b -> SpotBalance? in
+            guard let coin = b["coin"] as? String else { return nil }
+            let total = d(b["total"])
+            return SpotBalance(coin: coin, token: (b["token"] as? NSNumber)?.intValue ?? -1, total: total, hold: d(b["hold"]),
+                               usdValue: stable.contains(coin.uppercased()) ? total : 0)
+        }
+        if balances.contains(where: { !stable.contains($0.coin.uppercased()) && $0.total != 0 }), let prices = try? await spotPrices() {
+            for i in balances.indices where !stable.contains(balances[i].coin.uppercased()) {
+                balances[i].usdValue = balances[i].total * (prices[balances[i].token] ?? 0)
+            }
+        }
+        return balances
+    }
+
+    /// USDC price per spot token index, from the token/USDC pairs.
+    func spotPrices() async throws -> [Int: Double] {
+        let raw = try await info(["type": "spotMetaAndAssetCtxs"])
+        guard let arr = raw as? [Any], arr.count >= 2, let meta = arr[0] as? [String: Any],
+              let universe = meta["universe"] as? [[String: Any]], let ctxs = arr[1] as? [[String: Any]] else { throw HLError.decoding("spotMeta") }
+        var byCoin: [String: Double] = [:]
+        for c in ctxs {
+            guard let coin = c["coin"] as? String else { continue }
+            let mid = d(c["midPx"]), mark = d(c["markPx"])
+            byCoin[coin] = mid > 0 ? mid : mark
+        }
+        var out: [Int: Double] = [0: 1]
+        for u in universe {
+            guard let tokens = u["tokens"] as? [Int], tokens.count == 2, tokens[1] == 0, let name = u["name"] as? String,
+                  let px = byCoin[name], out[tokens[0]] == nil else { continue }
+            out[tokens[0]] = px
+        }
+        return out
+    }
+
+    private func perpsAccountState(user: String) async throws -> AccountState {
         async let chRaw = info(["type": "clearinghouseState", "user": user])
         async let ordRaw = info(["type": "frontendOpenOrders", "user": user])
         let (ch, ord) = try await (chRaw, ordRaw)

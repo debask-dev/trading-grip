@@ -131,6 +131,8 @@ public struct CheckStep: Identifiable, Equatable, Sendable {
 public struct ConnectionReport: Equatable, Sendable {
     public var steps: [CheckStep]
     public var accountValue: Double?
+    public var spotValue: Double?
+    public var mode: AccountMode?
     public var positions: Int?
     public var agentAddress: String?
     public var agentName: String?
@@ -224,10 +226,17 @@ public enum ConnectionTester {
             let state = try await api.accountState(user: address)
             report.accountValue = state.accountValue
             report.positions = state.positions.count
-            if state.accountValue <= 0 && state.positions.isEmpty {
-                await set("account", .warning, "Gevonden, maar zonder saldo op \(net). Klopt het netwerk?")
+            report.accountValue = state.accountValue
+            report.spotValue = state.spotValue
+            report.mode = state.mode
+            let total = state.mode.balancesOnSpot ? state.accountValue : state.accountValue + state.spotValue
+            let posText = "\(state.positions.count) open positie\(state.positions.count == 1 ? "" : "s")"
+            if total <= 0 && state.positions.isEmpty {
+                await set("account", .warning, "\(state.mode.label), maar zonder saldo op \(net). Klopt het netwerk?")
+            } else if !state.mode.balancesOnSpot && state.accountValue <= 0 && state.spotValue > 0 {
+                await set("account", .warning, "\(state.mode.label) · \(posText). Je saldo staat op spot, niet op perps: zet USDC over naar perps (of zet Unified account aan) om te kunnen handelen.")
             } else {
-                await set("account", .ok, "\(state.positions.count) open positie\(state.positions.count == 1 ? "" : "s")")
+                await set("account", .ok, "\(state.mode.label) · \(posText)")
             }
         } catch {
             await set("account", .failed, "Kon het account niet ophalen: \(error.localizedDescription)")

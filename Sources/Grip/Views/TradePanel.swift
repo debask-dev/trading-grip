@@ -31,8 +31,13 @@ struct AccountCard: View {
     var body: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Portfolio").font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+                Text(state.account.mode.balancesOnSpot || state.paperMode ? "Portfolio" : "Perps-saldo").font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+                    .help(state.paperMode ? "Oefenaccount" : state.account.mode.label)
                 Text(state.hasAccount ? state.fmt.usd(state.account.accountValue) : "–").mono(17, .semibold)
+                if !state.paperMode && !state.account.mode.balancesOnSpot && state.account.spotValue > 0.005 {
+                    Text("+ spot \(state.fmt.usd(state.account.spotValue, decimals: 2))").mono(11).foregroundStyle(Theme.muted)
+                        .help("Je spot-saldo telt in een standaard account niet mee als marge voor perps. Zet het over naar perps, of zet Unified account aan op Hyperliquid.")
+                }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 3) {

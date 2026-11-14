@@ -108,6 +108,41 @@ final class AccountTests: XCTestCase {
         XCTAssertFalse(r.passed)
     }
 
+    func testUnifiedAccountUsesSpotBalance() async {
+        // Unified account: perps state shows 0, the USDC lives on the spot side (like the user's $3.40).
+        let perps = AccountState(accountValue: 0, withdrawable: 0, marginUsed: 0, positions: [], openOrders: [])
+        let spot = [SpotBalance(coin: "USDC", token: 0, total: 3.4, hold: 0, usdValue: 3.4)]
+        let unified = AccountState.combine(perps: perps, mode: AccountMode(api: "unifiedAccount"), spot: spot)
+        XCTAssertEqual(unified.mode, .unified)
+        XCTAssertEqual(unified.accountValue, 3.4, accuracy: 1e-9)
+        XCTAssertEqual(unified.withdrawable, 3.4, accuracy: 1e-9)
+
+        let api = FakeInfo()
+        api.states[main.lowercased()] = unified
+        let r = await ConnectionTester.run(api: api, network: .mainnet, address: main, agentKey: nil, now: now)
+        XCTAssertEqual(status(r, "account"), .ok)
+        XCTAssertEqual(r.accountValue ?? 0, 3.4, accuracy: 1e-9)
+
+        // Unified with an open position: unrealized PnL counts, margin held on USDC is not free.
+        let pos = Position(coin: "BTC", size: 0.01, entryPx: 100_000, unrealizedPnl: -2, liquidationPx: nil, leverage: 5, isCross: true, marginUsed: 200)
+        let withPos = AccountState.combine(perps: AccountState(accountValue: 0, withdrawable: 0, marginUsed: 200, positions: [pos], openOrders: []),
+                                           mode: .unified, spot: [SpotBalance(coin: "USDC", token: 0, total: 1000, hold: 200, usdValue: 1000)])
+        XCTAssertEqual(withPos.accountValue, 998, accuracy: 1e-9)
+        XCTAssertEqual(withPos.withdrawable, 798, accuracy: 1e-9)
+    }
+
+    func testStandardAccountWithOnlySpotBalanceWarns() async {
+        let perps = AccountState(accountValue: 0, withdrawable: 0, marginUsed: 0, positions: [], openOrders: [])
+        let st = AccountState.combine(perps: perps, mode: AccountMode(api: "disabled"), spot: [SpotBalance(coin: "USDC", token: 0, total: 50, hold: 0, usdValue: 50)])
+        XCTAssertEqual(st.accountValue, 0)
+        XCTAssertEqual(st.spotValue, 50)
+        let api = FakeInfo()
+        api.states[main.lowercased()] = st
+        let r = await ConnectionTester.run(api: api, network: .mainnet, address: main, agentKey: nil, now: now)
+        XCTAssertEqual(status(r, "account"), .warning)
+        XCTAssertTrue(r.passed)
+    }
+
     func testAccountCodable() throws {
         var a = ExchangeAccount(network: .testnet, label: "Test", address: main, agentAddress: agentAddr)
         a.lastCheckOK = true

@@ -536,7 +536,7 @@ struct AccountDetailView: View {
                                       systemImage: r.passed ? "checkmark.seal.fill" : "exclamationmark.octagon.fill")
                                     .foregroundStyle(r.passed ? Theme.green : Theme.red).font(.system(size: 13, weight: .semibold))
                                 if let v = r.accountValue {
-                                    Text("· saldo \(state.fmt.usd(v))").foregroundStyle(Theme.muted).font(.system(size: 13))
+                                    Text(balanceText(v, r)).foregroundStyle(Theme.muted).font(.system(size: 13))
                                 }
                             } else if test.running {
                                 Text("Bezig met testen…").foregroundStyle(Theme.muted)
@@ -569,6 +569,15 @@ struct AccountDetailView: View {
         } message: {
             Text("Het account en de API-wallet-sleutel worden uit Grip en de sleutelhanger verwijderd. Op Hyperliquid blijft de API-wallet bestaan; die kun je daar intrekken.")
         }
+    }
+
+    private func balanceText(_ v: Double, _ r: ConnectionReport) -> String {
+        let f = state.fmt
+        let mode = r.mode.map { " · \($0.label)" } ?? ""
+        if let m = r.mode, !m.balancesOnSpot, let spot = r.spotValue, spot > 0.005 {
+            return "· perps \(f.usd(v, decimals: 2)) + spot \(f.usd(spot, decimals: 2))\(mode)"
+        }
+        return "· saldo \(f.usd(v, decimals: 2))\(mode)"
     }
 
     private func runTest() {
