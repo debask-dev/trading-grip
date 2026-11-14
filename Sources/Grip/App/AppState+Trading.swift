@@ -54,8 +54,8 @@ extension AppState {
               let sl = account.openOrders.first(where: { $0.coin == c && $0.isTrigger && $0.tpsl == .sl }),
               let a = assets.first(where: { $0.name == c }) else { return }
         let o = analysis.open[c]
-        let be = PositionMath.breakEven(entry: pos.entryPx, size: pos.size, feesPaid: o?.feesPaid ?? 0, realized: force ? (o?.realized ?? 0) : 0,
-                                        funding: o?.funding ?? 0, takerRate: feeRates.taker)
+        guard let be = PositionMath.breakEven(entry: pos.entryPx, size: pos.size, feesPaid: o?.feesPaid ?? 0, realized: force ? (o?.realized ?? 0) : 0,
+                                        funding: o?.funding ?? 0, takerRate: feeRates.taker) else { return }
         let px = HLFormat.roundPrice(be, szDecimals: a.szDecimals)
         // Only ever move the stop in the safe direction.
         guard pos.isLong ? px > sl.displayPx : px < sl.displayPx else { breakEvenAfterTP.remove(c); return }
