@@ -75,6 +75,7 @@ public struct OpenTrade: Equatable, Sendable {
 public struct TradeAnalysis: Equatable, Sendable {
     public var closed: [ClosedTrade]
     public var open: [String: OpenTrade]
+    public init(closed: [ClosedTrade], open: [String: OpenTrade]) { self.closed = closed; self.open = open }
     public var executions: [Execution] { closed.flatMap { $0.executions } + open.values.flatMap { $0.executions } }
 }
 
