@@ -78,9 +78,9 @@ extension AppState {
         let side = pos.isLong ? "long" : "short", other = pos.isLong ? "short" : "long"
         let px = livePrice(c) ?? pos.entryPx
         pendingConfirm = ConfirmRequest(
-            title: "\(c) omkeren naar \(other)?",
-            message: "Sluit je \(side) van \(fmt.size(pos.size, coin: c, decimals: 4)) en opent een \(other) van dezelfde grootte (market, ≈ \(Fmt.price(px))).\nJe stop en take-profits vervallen; zet daarna een nieuwe stop.",
-            confirmTitle: "Omkeren", destructive: true) { [weak self] in
+            title: T("\(c) omkeren naar \(other)?"),
+            message: T("Sluit je \(side) van \(fmt.size(pos.size, coin: c, decimals: 4)) en opent een \(other) van dezelfde grootte (market, ≈ \(Fmt.price(px))).\nJe stop en take-profits vervallen; zet daarna een nieuwe stop."),
+            confirmTitle: T("Omkeren"), destructive: true) { [weak self] in
                 Task { await self?.reverse(coin: c) }
             }
     }
@@ -98,11 +98,11 @@ extension AppState {
             let size = HLFormat.roundSize(abs(pos.size) * 2, szDecimals: a.szDecimals)
             let st = try await execOrders([OrderRequest(asset: a, isBuy: isBuy, size: size, limitPx: px, reduceOnly: false, kind: .limit(tif: "Ioc"))])
             try throwIfRejected(st)
-            toast("\(c) omgekeerd naar \(isBuy ? "long" : "short"). Zet een nieuwe stop.", .success)
+            toast(T("\(c) omgekeerd naar \(isBuy ? "long" : "short"). Zet een nieuwe stop."), .success)
             goToPosition(c)
         } catch {
-            toast("Omkeren mislukt: \(error.localizedDescription)", .error)
-            notify(.orderProblem, "Omkeren mislukt", error.localizedDescription)
+            toast(T("Omkeren mislukt: \(error.localizedDescription)"), .error)
+            notify(.orderProblem, T("Omkeren mislukt"), error.localizedDescription)
         }
         await refreshAccount()
         await refreshHistory()

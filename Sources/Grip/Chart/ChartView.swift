@@ -43,7 +43,7 @@ struct ChartView: NSViewRepresentable {
         set(\.indicators, s.indicators)
         set(\.legendCollapsed, s.legendCollapsed)
         if v.lastPrice <= 0 { v.lastPrice = s.price }
-        let labelKey = "\(s.hideAmounts)|\(s.ticket.map { "\($0)" } ?? "")|\(s.position.map { "\($0.size)|\($0.entryPx)" } ?? "")|\(s.riskPercent)|\(s.account.accountValue)"
+        let labelKey = "\(s.chartResetLabels)|\(s.hideAmounts)|\(s.ticket.map { "\($0)" } ?? "")|\(s.position.map { "\($0.size)|\($0.entryPx)" } ?? "")|\(s.riskPercent)|\(s.account.accountValue)"
         set(\.labelKey, labelKey)
 
         v.labelFor = { id, px in s.lineLabel(id, at: px) }

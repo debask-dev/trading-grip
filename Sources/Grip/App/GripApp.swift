@@ -8,7 +8,7 @@ struct GripApp: App {
     @StateObject private var state = AppState()
 
     var body: some Scene {
-        Window("Grip", id: "main") {
+        Window(T("Grip"), id: "main") {
             MainView()
                 .environmentObject(state)
                 .frame(minWidth: 980, minHeight: 620)
@@ -29,7 +29,7 @@ struct GripApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Accounts", id: "accounts") {
+        Window(T("Accounts"), id: "accounts") {
             AccountsView()
                 .environmentObject(state)
                 .preferredColorScheme(.dark)
@@ -61,76 +61,76 @@ struct GripCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) {}
 
-        CommandMenu("Chart") {
+        CommandMenu(T("Chart")) {
             ForEach(Array(Timeframe.allCases.enumerated()), id: \.element) { i, tf in
-                Button("Timeframe \(tf.label)") { state.timeframe = tf }
+                Button(T("Timeframe \(tf.label)")) { state.timeframe = tf }
                     .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
             }
-            Button("Vorige timeframe") { state.stepTimeframe(-1) }
+            Button(T("Vorige timeframe")) { state.stepTimeframe(-1) }
                 .keyboardShortcut("[", modifiers: .command)
-            Button("Volgende timeframe") { state.stepTimeframe(1) }
+            Button(T("Volgende timeframe")) { state.stepTimeframe(1) }
                 .keyboardShortcut("]", modifiers: .command)
             Divider()
-            Button("Markt openen in nieuwe tab") { state.tab = .trade; state.showMarketPicker = true }
+            Button(T("Markt openen in nieuwe tab")) { state.tab = .trade; state.showMarketPicker = true }
                 .keyboardShortcut("t", modifiers: .command)
-            Button("Volgende markt") { state.selectTab(offset: 1) }
+            Button(T("Volgende markt")) { state.selectTab(offset: 1) }
                 .keyboardShortcut(.tab, modifiers: .control)
-            Button("Vorige markt") { state.selectTab(offset: -1) }
+            Button(T("Vorige markt")) { state.selectTab(offset: -1) }
                 .keyboardShortcut(.tab, modifiers: [.control, .shift])
             ForEach(1..<10) { n in
-                Button("Markt \(n)") { state.selectTab(number: n) }
+                Button(T("Markt \(n)")) { state.selectTab(number: n) }
                     .keyboardShortcut(KeyEquivalent(Character(String(n))), modifiers: .control)
             }
-            Button(state.dockExpanded ? "Overzicht inklappen" : "Overzicht posities en orders") { state.dockExpanded.toggle() }
+            Button(state.dockExpanded ? T("Overzicht inklappen") : T("Overzicht posities en orders")) { state.dockExpanded.toggle() }
                 .keyboardShortcut("j", modifiers: .command)
             Divider()
-            Button(state.tool == .trendline ? "Trendlijn stoppen" : "Trendlijn") { state.toggleTool(.trendline) }
+            Button(state.tool == .trendline ? T("Trendlijn stoppen") : T("Trendlijn")) { state.toggleTool(.trendline) }
                 .keyboardShortcut("t", modifiers: .option)
-            Button("Horizontale lijn op cursor") { state.addLineAtCursor(vertical: false) }
+            Button(T("Horizontale lijn op cursor")) { state.addLineAtCursor(vertical: false) }
                 .keyboardShortcut("h", modifiers: .option)
-            Button("Verticale lijn op cursor") { state.addLineAtCursor(vertical: true) }
+            Button(T("Verticale lijn op cursor")) { state.addLineAtCursor(vertical: true) }
                 .keyboardShortcut("v", modifiers: .option)
-            Button(state.tool == .measure ? "Meten stoppen" : "Meten") { state.toggleTool(.measure) }
-            Button(state.magnet ? "Magneet uit" : "Magneet aan") { state.magnet.toggle() }
+            Button(state.tool == .measure ? T("Meten stoppen") : T("Meten")) { state.toggleTool(.measure) }
+            Button(state.magnet ? T("Magneet uit") : T("Magneet aan")) { state.magnet.toggle() }
                 .keyboardShortcut("m", modifiers: .option)
-            Button("Geselecteerde lijn verwijderen") { state.deleteSelectedTrendline() }
+            Button(T("Geselecteerde lijn verwijderen")) { state.deleteSelectedTrendline() }
                 .disabled(state.selectedTrendline == nil)
             Divider()
-            Button("Chart resetten") { state.resetChart() }
+            Button(T("Chart resetten")) { state.resetChart() }
                 .keyboardShortcut("r", modifiers: .option)
-            Button("Vernieuwen") { state.refreshEverything() }
+            Button(T("Vernieuwen")) { state.refreshEverything() }
                 .keyboardShortcut("r", modifiers: .command)
-            Button("Screenshot van chart") { state.takeScreenshot() }
+            Button(T("Screenshot van chart")) { state.takeScreenshot() }
                 .keyboardShortcut("s", modifiers: [.command, .shift])
-            Button("Screenshotmap openen") { state.revealScreenshotFolder() }
+            Button(T("Screenshotmap openen")) { state.revealScreenshotFolder() }
         }
 
-        CommandMenu("Trade") {
-            Button("Nieuwe long") { state.newTicket(long: true) }
+        CommandMenu(T("Trade")) {
+            Button(T("Nieuwe long")) { state.newTicket(long: true) }
                 .keyboardShortcut("l", modifiers: .option)
-            Button("Nieuwe short") { state.newTicket(long: false) }
+            Button(T("Nieuwe short")) { state.newTicket(long: false) }
                 .keyboardShortcut("s", modifiers: .option)
-            Button("Order annuleren (ticket)") { state.ticket = nil }
+            Button(T("Order annuleren (ticket)")) { state.ticket = nil }
                 .disabled(state.ticket == nil)
             Divider()
-            Button("Market long (Bedrag)") { state.quickTrade(long: true) }
+            Button(T("Market long (Bedrag)")) { state.quickTrade(long: true) }
                 .keyboardShortcut("b", modifiers: .option)
-            Button("Market short (Bedrag)") { state.quickTrade(long: false) }
+            Button(T("Market short (Bedrag)")) { state.quickTrade(long: false) }
                 .keyboardShortcut("n", modifiers: .option)
-            Button("Positie sluiten") { state.quickClose() }
+            Button(T("Positie sluiten")) { state.quickClose() }
                 .keyboardShortcut("x", modifiers: .option)
                 .disabled(state.position == nil)
             Divider()
-            Picker("Tabblad", selection: $state.panelMode) {
+            Picker(T("Tabblad"), selection: $state.panelMode) {
                 ForEach(PanelMode.allCases) { Text($0.label).tag($0) }
             }
             Divider()
-            Button(state.hideAmounts ? "Bedragen tonen" : "Bedragen verbergen") { state.hideAmounts.toggle() }
+            Button(state.hideAmounts ? T("Bedragen tonen") : T("Bedragen verbergen")) { state.hideAmounts.toggle() }
                 .keyboardShortcut("h", modifiers: [.command, .shift])
         }
 
         CommandGroup(replacing: .help) {
-            Button("Sneltoetsen") { state.showShortcuts = true }
+            Button(T("Sneltoetsen")) { state.showShortcuts = true }
                 .keyboardShortcut("/", modifiers: .command)
         }
 

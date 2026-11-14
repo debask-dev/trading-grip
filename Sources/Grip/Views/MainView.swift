@@ -21,7 +21,7 @@ struct MainView: View {
                 MarketTabs()
             }
             ToolbarItem(placement: .principal) {
-                Picker("Weergave", selection: $state.tab) {
+                Picker(T("Weergave"), selection: $state.tab) {
                     ForEach(MainTab.allCases) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
@@ -32,13 +32,13 @@ struct MainView: View {
                 Button {
                     state.hideAmounts.toggle()
                 } label: {
-                    Label(state.hideAmounts ? "Bedragen tonen" : "Bedragen verbergen", systemImage: state.hideAmounts ? "eye.slash.fill" : "eye")
+                    Label(state.hideAmounts ? T("Bedragen tonen") : T("Bedragen verbergen"), systemImage: state.hideAmounts ? "eye.slash.fill" : "eye")
                 }
-                .help("Bedragen verbergen voor screenshots (⇧⌘H)")
+                .help(T("Bedragen verbergen voor screenshots (⇧⌘H)"))
                 SettingsLink {
-                    Label("Instellingen", systemImage: "gearshape")
+                    Label(T("Instellingen"), systemImage: "gearshape")
                 }
-                .help("Instellingen (⌘,)")
+                .help(T("Instellingen (⌘,)"))
             }
         }
         .overlay(alignment: .top) { ToastStack().padding(.top, 10) }
@@ -47,12 +47,12 @@ struct MainView: View {
         .alert(state.pendingConfirm?.title ?? "", isPresented: Binding(get: { state.pendingConfirm != nil }, set: { if !$0 { state.pendingConfirm = nil } }), presenting: state.pendingConfirm) { req in
             Button(req.confirmTitle, role: req.destructive ? .destructive : nil) { req.action(); state.pendingConfirm = nil }
                 .keyboardShortcut(.defaultAction)
-            Button("Annuleer", role: .cancel) { state.pendingConfirm = nil }
+            Button(T("Annuleer"), role: .cancel) { state.pendingConfirm = nil }
         } message: { req in
             Text(req.message)
         }
-        .alert("Let op", isPresented: Binding(get: { state.securityNotice != nil }, set: { if !$0 { state.securityNotice = nil } })) {
-            Button("Begrepen") { state.securityNotice = nil }
+        .alert(T("Let op"), isPresented: Binding(get: { state.securityNotice != nil }, set: { if !$0 { state.securityNotice = nil } })) {
+            Button(T("Begrepen")) { state.securityNotice = nil }
         } message: {
             Text(state.securityNotice ?? "")
         }
@@ -86,9 +86,9 @@ struct NetworkBadge: View {
 
     private var title: String {
         switch state.connectionStatus {
-        case .paper: return "OEFENEN"
-        case .none: return "ACCOUNT KOPPELEN"
-        default: return state.network.isMainnet ? "MAINNET" : "TESTNET"
+        case .paper: return T("OEFENEN")
+        case .none: return T("ACCOUNT KOPPELEN")
+        default: return state.network.isMainnet ? T("MAINNET") : T("TESTNET")
         }
     }
 
@@ -109,11 +109,11 @@ struct NetworkBadge: View {
 
     private var helpText: String {
         switch state.connectionStatus {
-        case .trading: return "Verbonden: handelen werkt. Klik om accounts te beheren."
-        case .readOnly: return "Verbonden, alleen-lezen (geen API-wallet). Klik om er een toe te voegen."
-        case .error(let e): return "Probleem met de verbinding: \(e)"
-        case .paper: return "Oefenmodus: gesimuleerde orders. Klik om een account te koppelen."
-        case .none: return "Koppel je Hyperliquid-account."
+        case .trading: return T("Verbonden: handelen werkt. Klik om accounts te beheren.")
+        case .readOnly: return T("Verbonden, alleen-lezen (geen API-wallet). Klik om er een toe te voegen.")
+        case .error(let e): return T("Probleem met de verbinding: \(e)")
+        case .paper: return T("Oefenmodus: gesimuleerde orders. Klik om een account te koppelen.")
+        case .none: return T("Koppel je Hyperliquid-account.")
         }
     }
 }
@@ -140,16 +140,16 @@ struct CoinPicker: View {
         } label: {
             Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).padding(.horizontal, 6)
         }
-        .help("Markt openen in een nieuwe tab (⌘T)")
+        .help(T("Markt openen in een nieuwe tab (⌘T)"))
         .popover(isPresented: $state.showMarketPicker, arrowEdge: .bottom) {
             VStack(spacing: 8) {
-                TextField("Zoek markt", text: $query)
+                TextField(T("Zoek markt"), text: $query)
                     .textFieldStyle(.roundedBorder)
                 HStack(spacing: 0) {
-                    header("Markt", .name).frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Prijs").frame(width: 82, alignment: .trailing)
+                    header(T("Markt"), .name).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(T("Prijs")).frame(width: 82, alignment: .trailing)
                     header("24u", .change).frame(width: 62, alignment: .trailing)
-                    header("Volume 24u", .volume).frame(width: 92, alignment: .trailing)
+                    header(T("Volume 24u"), .volume).frame(width: 92, alignment: .trailing)
                 }
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(Theme.muted)
@@ -163,7 +163,7 @@ struct CoinPicker: View {
                         HStack(spacing: 0) {
                             HStack(spacing: 5) {
                                 Text(a.name).font(.system(size: 13, weight: .semibold))
-                                Text("\(a.maxLeverage)×").font(.system(size: 10)).foregroundStyle(Theme.muted)
+                                Text(T("\(a.maxLeverage)×")).font(.system(size: 10)).foregroundStyle(Theme.muted)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             if let c = state.contexts[a.name] {
@@ -196,7 +196,7 @@ struct CoinPicker: View {
             .foregroundStyle(sort == key ? Theme.text : Theme.muted)
         }
         .buttonStyle(.plain)
-        .help("Sorteer op \(title.lowercased())")
+        .help(T("Sorteer op \(title.lowercased())"))
     }
 
     private var filtered: [AssetInfo] {
@@ -233,17 +233,17 @@ struct MarketStats: View {
         return HStack(spacing: 14) {
             if let h {
                 stat("1u", Fmt.percent(h.change, decimals: 2), Theme.pnl(h.change))
-                    .help("Laatste uur: \(Fmt.price(h.low)) – \(Fmt.price(h.high))")
-                stat("Vol 1u", "$" + Fmt.compact(h.volumeUsd))
-                    .help("\(Fmt.compact(h.volume)) \(state.coin) in het laatste uur")
+                    .help(T("Laatste uur: \(Fmt.price(h.low)) – \(Fmt.price(h.high))"))
+                stat(T("Vol 1u"), "$" + Fmt.compact(h.volumeUsd))
+                    .help(T("\(Fmt.compact(h.volume)) \(state.coin) in het laatste uur"))
             }
             if let ctx {
-                if level < 2 { stat("Vol 24u", "$" + Fmt.compact(ctx.dayVolume)) }
-                stat("Funding", Fmt.number(ctx.funding * 100, decimals: 4) + "%", ctx.funding >= 0 ? Theme.text : Theme.green)
-                    .help("Funding per uur. Positief: longs betalen shorts. Negatief: shorts betalen longs.")
+                if level < 2 { stat(T("Vol 24u"), "$" + Fmt.compact(ctx.dayVolume)) }
+                stat(T("Funding"), Fmt.number(ctx.funding * 100, decimals: 4) + "%", ctx.funding >= 0 ? Theme.text : Theme.green)
+                    .help(T("Funding per uur. Positief: longs betalen shorts. Negatief: shorts betalen longs."))
                 if level < 1 && ctx.openInterest > 0 {
-                    stat("Open int.", "$" + Fmt.compact(ctx.openInterest * ctx.markPx))
-                        .help("Waarde van alle open posities op deze markt")
+                    stat(T("Open int."), "$" + Fmt.compact(ctx.openInterest * ctx.markPx))
+                        .help(T("Waarde van alle open posities op deze markt"))
                 }
             }
         }
@@ -318,7 +318,7 @@ struct ChartHeader: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 1) {
                 Text(Fmt.price(state.price)).mono(17, .semibold)
-                Text(Fmt.percent(state.change24h) + " 24u").mono(11).foregroundStyle(Theme.pnl(state.change24h))
+                Text(Fmt.percent(state.change24h) + T(" 24u")).mono(11).foregroundStyle(Theme.pnl(state.change24h))
             }
             .frame(minWidth: 110, alignment: .leading)
 
@@ -332,7 +332,7 @@ struct ChartHeader: View {
                             .frame(minWidth: 32, minHeight: 24)
                     }
                     .buttonStyle(HoverButtonStyle(active: state.timeframe == tf, activeFill: Theme.card))
-                    .help("Timeframe \(tf.label) (⌘\(i + 1) · of typ \(typedHint(tf)) + ⏎ in de chart)")
+                    .help(T("Timeframe \(tf.label) (⌘\(i + 1) · of typ \(typedHint(tf)) + ⏎ in de chart)"))
                     .demoAnchor("tf-\(tf.rawValue)")
                 }
             }
@@ -342,38 +342,38 @@ struct ChartHeader: View {
             Divider().frame(height: 22)
 
             HStack(spacing: 4) {
-                ToolButton(icon: "cursorarrow", active: state.tool == .cursor, help: "Aanwijzer (Esc)") { state.tool = .cursor }
-                ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: "Trendlijn (⌥T) · ⌘ = snap aan/uit") {
+                ToolButton(icon: "cursorarrow", active: state.tool == .cursor, help: T("Aanwijzer (Esc)")) { state.tool = .cursor }
+                ToolButton(icon: "line.diagonal", active: state.tool == .trendline, help: T("Trendlijn (⌥T) · ⌘ = snap aan/uit")) {
                     state.toggleTool(.trendline)
                 }
                 .demoAnchor("tool-trend")
-                ToolButton(icon: "minus", active: state.tool == .horizontal, help: "Horizontale lijn: klik op een prijs · ⌥H = direct op de cursor") {
+                ToolButton(icon: "minus", active: state.tool == .horizontal, help: T("Horizontale lijn: klik op een prijs · ⌥H = direct op de cursor")) {
                     state.toggleTool(.horizontal)
                 }
-                ToolButton(icon: "ruler", active: state.tool == .measure, help: "Meten: klik begin en eind · of ⇧-klik in de chart") {
+                ToolButton(icon: "ruler", active: state.tool == .measure, help: T("Meten: klik begin en eind · of ⇧-klik in de chart")) {
                     state.toggleTool(.measure)
                 }
                 Menu {
                     ForEach(IndicatorKind.allCases, id: \.self) { k in
-                        Button(k.title) { state.addIndicator(k) }
+                        Button(T(k.title)) { state.addIndicator(k) }
                             .disabled(k == .volume && state.indicators.contains { $0.kind == .volume && $0.visible })
                     }
                 } label: {
-                    Text("ƒx").font(.system(size: 13, weight: .semibold, design: .serif)).italic()
+                    Text(T("ƒx")).font(.system(size: 13, weight: .semibold, design: .serif)).italic()
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Indicator toevoegen")
+                .help(T("Indicator toevoegen"))
                 if !state.coinTrendlines.isEmpty {
                     Menu {
-                        Button("Wis alle lijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }
+                        Button(T("Wis alle lijnen voor \(state.coin)"), role: .destructive) { state.clearTrendlines() }
                     } label: {
                         Image(systemName: "trash").font(.system(size: 12))
                     }
                     .menuStyle(.borderlessButton)
                     .fixedSize()
-                    .help("Lijnen wissen")
+                    .help(T("Lijnen wissen"))
                 }
             }
 
@@ -386,10 +386,10 @@ struct ChartHeader: View {
 
             if state.loadingCandles { ProgressView().controlSize(.small) }
             HStack(spacing: 4) {
-                ToolButton(icon: "camera", active: false, help: "Screenshot van de chart (⇧⌘S) – bewaard in \((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)") {
+                ToolButton(icon: "camera", active: false, help: T("Screenshot van de chart (⇧⌘S) – bewaard in \((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)")) {
                     state.takeScreenshot()
                 }
-                ToolButton(icon: "arrow.clockwise", active: false, help: "Vernieuwen: opnieuw verbinden en alles herladen (⌘R)") {
+                ToolButton(icon: "arrow.clockwise", active: false, help: T("Vernieuwen: opnieuw verbinden en alles herladen (⌘R)")) {
                     state.refreshEverything()
                 }
             }
@@ -405,9 +405,9 @@ struct ChartHeader: View {
         case .m5: return "5"
         case .m15: return "15"
         case .h1: return "60"
-        case .h4: return "4h"
-        case .d1: return "D"
-        case .w1: return "W"
+        case .h4: return T("4h")
+        case .d1: return T("D")
+        case .w1: return T("W")
         }
     }
 }
@@ -432,43 +432,43 @@ struct ToolButton: View {
 struct ShortcutsView: View {
     @Environment(\.dismiss) private var dismiss
     private let groups: [(String, [(String, String)])] = [
-        ("Chart", [
-            ("⌘1 … ⌘7", "Timeframe 1m … 1w"),
-            ("Typ 1 · 5 · 15 · 60 · 4h · D · W, dan ⏎", "Timeframe kiezen zoals in TradingView"),
-            ("⌘[  /  ⌘]", "Vorige / volgende timeframe"),
-            ("← →  (⇧ = 10 candles)", "Chart verschuiven"),
-            ("↑ ↓", "In- en uitzoomen"),
-            ("⌥R", "Chart resetten (zoom, positie, schaal)"),
-            ("Scrollen · knijpen", "Zoomen rond de cursor"),
-            ("Slepen op tijd-as / prijs-as", "Horizontaal / verticaal schalen"),
-            ("Dubbelklik op een as", "As terugzetten"),
+        (T("Chart"), [
+            ("⌘1 … ⌘7", T("Timeframe 1m … 1w")),
+            (T("Typ 1 · 5 · 15 · 60 · 4h · D · W, dan ⏎"), T("Timeframe kiezen zoals in TradingView")),
+            ("⌘[  /  ⌘]", T("Vorige / volgende timeframe")),
+            (T("← →  (⇧ = 10 candles)"), T("Chart verschuiven")),
+            ("↑ ↓", T("In- en uitzoomen")),
+            ("⌥R", T("Chart resetten (zoom, positie, schaal)")),
+            (T("Scrollen · knijpen"), T("Zoomen rond de cursor")),
+            (T("Slepen op tijd-as / prijs-as"), T("Horizontaal / verticaal schalen")),
+            (T("Dubbelklik op een as"), T("As terugzetten")),
         ]),
-        ("Tekenen & meten", [
-            ("⌥T", "Trendlijn aan/uit"),
-            ("⌥H  /  ⌥V", "Horizontale / verticale lijn op de cursor"),
-            ("⌥M", "Magneet aan/uit"),
-            ("⌘ ingedrukt", "Snap tijdelijk omzetten"),
-            ("⇧ + klik, klik", "Meten: %, candles, tijd"),
-            ("⌫", "Geselecteerde lijn verwijderen"),
-            ("Esc", "Terug naar aanwijzer / annuleren"),
+        (T("Tekenen & meten"), [
+            ("⌥T", T("Trendlijn aan/uit")),
+            (T("⌥H  /  ⌥V"), T("Horizontale / verticale lijn op de cursor")),
+            ("⌥M", T("Magneet aan/uit")),
+            (T("⌘ ingedrukt"), T("Snap tijdelijk omzetten")),
+            (T("⇧ + klik, klik"), T("Meten: %, candles, tijd")),
+            ("⌫", T("Geselecteerde lijn verwijderen")),
+            (T("Esc"), T("Terug naar aanwijzer / annuleren")),
         ]),
-        ("Traden", [
-            ("⌥L  /  ⌥S", "Nieuwe long / short"),
-            ("⌥B  /  ⌥N  /  ⌥X", "Snel: market long / short / sluiten"),
-            ("⇧⌘S", "Screenshot van de chart"),
-            ("⌘↩", "Order plaatsen"),
-            ("⇧⌘H", "Bedragen verbergen"),
-            ("⌥⌘1 / 2 / 3", "Traden / Historie / Portfolio"),
-            ("⌘R", "Vernieuwen"),
+        (T("Traden"), [
+            (T("⌥L  /  ⌥S"), T("Nieuwe long / short")),
+            (T("⌥B  /  ⌥N  /  ⌥X"), T("Snel: market long / short / sluiten")),
+            ("⇧⌘S", T("Screenshot van de chart")),
+            ("⌘↩", T("Order plaatsen")),
+            ("⇧⌘H", T("Bedragen verbergen")),
+            ("⌥⌘1 / 2 / 3", T("Traden / Historie / Portfolio")),
+            ("⌘R", T("Vernieuwen")),
         ]),
     ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Text("Sneltoetsen").font(.system(size: 20, weight: .bold))
+                Text(T("Sneltoetsen")).font(.system(size: 20, weight: .bold))
                 Spacer()
-                Button("Sluiten") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(T("Sluiten")) { dismiss() }.keyboardShortcut(.cancelAction)
             }
             HStack(alignment: .top, spacing: 28) {
                 ForEach(groups, id: \.0) { group in

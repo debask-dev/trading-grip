@@ -11,13 +11,13 @@ struct MenuBarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Grip").font(.system(size: 13, weight: .bold))
+                Text(T("Grip")).font(.system(size: 13, weight: .bold))
                 Spacer()
-                Text(state.paperMode ? "OEFENEN" : (state.network.isMainnet ? "MAINNET" : "TESTNET"))
+                Text(state.paperMode ? T("OEFENEN") : (state.network.isMainnet ? T("MAINNET") : T("TESTNET")))
                     .font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.muted)
             }
             if state.account.positions.isEmpty {
-                Text("Geen open posities").foregroundStyle(Theme.muted).font(.system(size: 12))
+                Text(T("Geen open posities")).foregroundStyle(Theme.muted).font(.system(size: 12))
             }
             ForEach(state.account.positions) { p in
                 let net = state.net(for: p)
@@ -28,11 +28,11 @@ struct MenuBarView: View {
                         Spacer()
                         Text(state.fmt.signedUsd(net, decimals: 2)).mono(13, .semibold).foregroundStyle(Theme.pnl(net))
                     }
-                    Text("\(state.fmt.size(p.size, coin: p.coin, decimals: 4)) · gem. \(Fmt.price(p.entryPx)) · netto na fees")
+                    Text(T("\(state.fmt.size(p.size, coin: p.coin, decimals: 4)) · gem. \(Fmt.price(p.entryPx)) · netto na fees"))
                         .font(.system(size: 11)).foregroundStyle(Theme.muted)
                     HStack(spacing: 6) {
-                        Button("Sluit 50%") { confirmClose(p, 0.5) }
-                        Button("Sluit alles") { confirmClose(p, 1) }
+                        Button(T("Sluit 50%")) { confirmClose(p, 0.5) }
+                        Button(T("Sluit alles")) { confirmClose(p, 1) }
                     }
                     .controlSize(.small)
                 }
@@ -41,12 +41,12 @@ struct MenuBarView: View {
             }
             Divider()
             HStack {
-                Button("Open Grip") {
+                Button(T("Open Grip")) {
                     NSApp.activate(ignoringOtherApps: true)
                     openWindow(id: "main")
                 }
                 Spacer()
-                Button("Stop") { NSApp.terminate(nil) }.foregroundStyle(Theme.muted)
+                Button(T("Stop")) { NSApp.terminate(nil) }.foregroundStyle(Theme.muted)
             }
             .buttonStyle(.borderless)
         }
@@ -58,10 +58,10 @@ struct MenuBarView: View {
     private func confirmClose(_ p: Position, _ fraction: Double) {
         guard state.confirmMarketOrders else { Task { await state.closePosition(fraction: fraction, coin: p.coin) }; return }
         let alert = NSAlert()
-        alert.messageText = fraction >= 1 ? "Hele \(p.coin)-positie sluiten?" : "\(Int(fraction * 100))% van je \(p.coin)-positie sluiten?"
-        alert.informativeText = "Market order · huidig netto resultaat \(state.fmt.signedUsd(state.net(for: p), decimals: 2))."
-        alert.addButton(withTitle: fraction >= 1 ? "Alles sluiten" : "Sluit \(Int(fraction * 100))%")
-        alert.addButton(withTitle: "Annuleer")
+        alert.messageText = fraction >= 1 ? T("Hele \(p.coin)-positie sluiten?") : T("\(Int(fraction * 100))% van je \(p.coin)-positie sluiten?")
+        alert.informativeText = T("Market order · huidig netto resultaat \(state.fmt.signedUsd(state.net(for: p), decimals: 2)).")
+        alert.addButton(withTitle: fraction >= 1 ? T("Alles sluiten") : T("Sluit \(Int(fraction * 100))%"))
+        alert.addButton(withTitle: T("Annuleer"))
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn {
             Task { await state.closePosition(fraction: fraction, coin: p.coin) }

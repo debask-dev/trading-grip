@@ -73,7 +73,7 @@ struct Card<Content: View>: View {
 struct SidePill: View {
     var isLong: Bool
     var body: some View {
-        Text(isLong ? "LONG" : "SHORT")
+        Text(isLong ? T("LONG") : T("SHORT"))
             .font(.system(size: 10.5, weight: .bold))
             .padding(.horizontal, 7).padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 5).fill((isLong ? Theme.green : Theme.red).opacity(0.15)))

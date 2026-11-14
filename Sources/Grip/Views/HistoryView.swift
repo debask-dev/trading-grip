@@ -6,7 +6,7 @@ import GripCore
 
 struct HistoryView: View {
     @EnvironmentObject var state: AppState
-    @State private var coinFilter = "Alle"
+    @State private var coinFilter = T("Alle")
     @State private var periodDays = 0
     @State private var expanded: Set<String> = []
 
@@ -25,48 +25,48 @@ struct HistoryView: View {
         let f = state.fmt
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Afgeronde trades").font(.system(size: 20, weight: .bold))
+                Text(T("Afgeronde trades")).font(.system(size: 20, weight: .bold))
                 Spacer()
-                Picker("Periode", selection: $periodDays) {
-                    Text("7 dagen").tag(7)
-                    Text("30 dagen").tag(30)
-                    Text("90 dagen").tag(90)
-                    Text("Alles").tag(0)
+                Picker(T("Periode"), selection: $periodDays) {
+                    Text(T("7 dagen")).tag(7)
+                    Text(T("30 dagen")).tag(30)
+                    Text(T("90 dagen")).tag(90)
+                    Text(T("Alles")).tag(0)
                 }
                 .frame(width: 170)
-                Picker("Markt", selection: $coinFilter) {
-                    Text("Alle").tag("Alle")
+                Picker(T("Markt"), selection: $coinFilter) {
+                    Text(T("Alle")).tag(T("Alle"))
                     ForEach(Array(Set(state.closedTrades.map { $0.coin })).sorted(), id: \.self) { Text($0).tag($0) }
                 }
                 .frame(width: 150)
-                Button { exportCSV() } label: { Label("CSV", systemImage: "square.and.arrow.up") }
+                Button { exportCSV() } label: { Label(T("CSV"), systemImage: "square.and.arrow.up") }
                     .disabled(trades.isEmpty)
-                    .help("Exporteer deze trades als CSV")
+                    .help(T("Exporteer deze trades als CSV"))
                 Button {
                     Task { await state.refreshHistory() }
                 } label: {
                     if state.loadingHistory { ProgressView().controlSize(.small) } else { Image(systemName: "arrow.clockwise") }
                 }
-                .help("Vernieuwen")
+                .help(T("Vernieuwen"))
             }
 
             HStack(spacing: 12) {
-                StatTile(title: "Netto PnL", value: f.signedUsd(stats.netPnl), color: Theme.pnl(stats.netPnl))
-                StatTile(title: "Trades", value: "\(stats.count)")
-                StatTile(title: "Winrate", value: Fmt.percent(stats.winRate, decimals: 0, signed: false))
-                StatTile(title: "Profit factor", value: stats.profitFactor.map { Fmt.number($0, decimals: 2) } ?? "–")
-                StatTile(title: "Gem. R", value: stats.avgR.map { (($0 >= 0) ? "+" : "") + Fmt.number($0, decimals: 2) + "R" } ?? "–")
-                StatTile(title: "Fees", value: f.usd(-stats.fees), color: Theme.muted)
-                StatTile(title: "Funding", value: f.signedUsd(stats.funding, decimals: 2), color: Theme.pnl(stats.funding))
+                StatTile(title: T("Netto PnL"), value: f.signedUsd(stats.netPnl), color: Theme.pnl(stats.netPnl))
+                StatTile(title: T("Trades"), value: "\(stats.count)")
+                StatTile(title: T("Winrate"), value: Fmt.percent(stats.winRate, decimals: 0, signed: false))
+                StatTile(title: T("Profit factor"), value: stats.profitFactor.map { Fmt.number($0, decimals: 2) } ?? "–")
+                StatTile(title: T("Gem. R"), value: stats.avgR.map { (($0 >= 0) ? "+" : "") + Fmt.number($0, decimals: 2) + "R" } ?? "–")
+                StatTile(title: T("Fees"), value: f.usd(-stats.fees), color: Theme.muted)
+                StatTile(title: T("Funding"), value: f.signedUsd(stats.funding, decimals: 2), color: Theme.pnl(stats.funding))
             }
 
-            Text("Netto = resultaat van de prijs − fees (in en uit) + funding. Gem. exit is volume-gewogen over alle TP's, stop en handmatige exits.")
+            Text(T("Netto = resultaat van de prijs − fees (in en uit) + funding. Gem. exit is volume-gewogen over alle TP's, stop en handmatige exits."))
                 .font(.system(size: 11)).foregroundStyle(Theme.dim)
 
             if !state.hasAccount {
-                EmptyState(icon: "person.crop.circle.badge.questionmark", text: "Koppel je account (⇧⌘A) om je tradehistorie te zien.")
+                EmptyState(icon: "person.crop.circle.badge.questionmark", text: T("Koppel je account (⇧⌘A) om je tradehistorie te zien."))
             } else if trades.isEmpty {
-                EmptyState(icon: "clock.arrow.circlepath", text: state.loadingHistory ? "Historie laden…" : "Nog geen afgeronde trades in deze periode.")
+                EmptyState(icon: "clock.arrow.circlepath", text: state.loadingHistory ? T("Historie laden…") : T("Nog geen afgeronde trades in deze periode."))
             } else {
                 header
                 ScrollView {
@@ -87,19 +87,19 @@ struct HistoryView: View {
         HStack(spacing: 0) {
             Group {
                 Text("").frame(width: 22)
-                Text("Gesloten").frame(width: 120, alignment: .leading)
-                Text("Markt").frame(width: 70, alignment: .leading)
-                Text("Gem. entry → exit").frame(minWidth: 170, alignment: .leading)
+                Text(T("Gesloten")).frame(width: 120, alignment: .leading)
+                Text(T("Markt")).frame(width: 70, alignment: .leading)
+                Text(T("Gem. entry → exit")).frame(minWidth: 170, alignment: .leading)
                 Spacer(minLength: 8)
-                Text("In/uit").frame(width: 56, alignment: .trailing)
-                Text("Bruto").frame(width: 84, alignment: .trailing)
-                Text("Fees").frame(width: 70, alignment: .trailing)
-                Text("Funding").frame(width: 70, alignment: .trailing)
+                Text(T("In/uit")).frame(width: 56, alignment: .trailing)
+                Text(T("Bruto")).frame(width: 84, alignment: .trailing)
+                Text(T("Fees")).frame(width: 70, alignment: .trailing)
+                Text(T("Funding")).frame(width: 70, alignment: .trailing)
             }
             Group {
-                Text("Netto").frame(width: 92, alignment: .trailing)
-                Text("R").frame(width: 56, alignment: .trailing)
-                Text("Duur").frame(width: 76, alignment: .trailing)
+                Text(T("Netto")).frame(width: 92, alignment: .trailing)
+                Text(T("R")).frame(width: 56, alignment: .trailing)
+                Text(T("Duur")).frame(width: 76, alignment: .trailing)
                 Text("").frame(width: 34)
             }
         }
@@ -122,9 +122,9 @@ struct HistoryView: View {
         }
         do {
             try rows.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
-            state.toast("\(trades.count) trades geëxporteerd", .success)
+            state.toast(T("\(trades.count) trades geëxporteerd"), .success)
         } catch {
-            state.toast("Exporteren mislukt: \(error.localizedDescription)", .error)
+            state.toast(T("Exporteren mislukt: \(error.localizedDescription)"), .error)
         }
     }
 }
@@ -149,7 +149,7 @@ struct TradeRow: View {
                     Text("\(Fmt.price(t.avgEntry)) → \(Fmt.price(t.avgExit))").monospacedDigit().frame(minWidth: 170, alignment: .leading)
                     Spacer(minLength: 8)
                     Text("\(t.entries.count)/\(t.exits.count)").monospacedDigit().foregroundStyle(Theme.muted).frame(width: 56, alignment: .trailing)
-                        .help("\(t.entries.count) keer ingestapt, \(t.exits.count) keer uitgestapt")
+                        .help(T("\(t.entries.count) keer ingestapt, \(t.exits.count) keer uitgestapt"))
                     Text(f.signedUsd(t.grossPnl, decimals: 2)).monospacedDigit().frame(width: 84, alignment: .trailing)
                     Text(f.usd(-t.fees, decimals: 2)).monospacedDigit().foregroundStyle(Theme.muted).frame(width: 70, alignment: .trailing)
                     Text(t.funding == 0 ? "–" : f.signedUsd(t.funding, decimals: 2)).monospacedDigit().foregroundStyle(Theme.muted).frame(width: 70, alignment: .trailing)
@@ -159,7 +159,7 @@ struct TradeRow: View {
                     Text(t.rMultiple.map { Fmt.number($0, decimals: 2) + "R" } ?? "–").monospacedDigit().frame(width: 56, alignment: .trailing)
                     Text(duration(t.duration)).foregroundStyle(Theme.muted).frame(width: 76, alignment: .trailing)
                     Button { state.show(trade: t) } label: { Image(systemName: "chart.xyaxis.line") }
-                        .buttonStyle(HoverButtonStyle(active: false)).frame(width: 34).help("Toon in chart")
+                        .buttonStyle(HoverButtonStyle(active: false)).frame(width: 34).help(T("Toon in chart"))
                 }
             }
             .font(.system(size: 12.5))
@@ -179,7 +179,7 @@ struct TradeRow: View {
                             Text("@ \(Fmt.price(e.price))").monospacedDigit().frame(width: 110, alignment: .leading)
                             Text(kindName(e)).foregroundStyle(Theme.muted).frame(width: 110, alignment: .leading)
                             Spacer()
-                            Text("fee \(f.usd(e.fee, decimals: 2))").monospacedDigit().foregroundStyle(Theme.dim).frame(width: 90, alignment: .trailing)
+                            Text(T("fee \(f.usd(e.fee, decimals: 2))")).monospacedDigit().foregroundStyle(Theme.dim).frame(width: 90, alignment: .trailing)
                             Text(e.role == .exit ? f.signedUsd(e.closedPnl - e.fee, decimals: 2) : "").monospacedDigit()
                                 .foregroundStyle(Theme.pnl(e.closedPnl - e.fee)).frame(width: 96, alignment: .trailing)
                         }
@@ -187,7 +187,7 @@ struct TradeRow: View {
                     }
                     if let risk = t.plannedRiskUsd {
                         HStack {
-                            Text("Gepland risico \(f.usd(risk, decimals: 2)) · grootste positie \(f.size(t.size, coin: t.coin, decimals: 4))")
+                            Text(T("Gepland risico \(f.usd(risk, decimals: 2)) · grootste positie \(f.size(t.size, coin: t.coin, decimals: 4))"))
                             Spacer()
                         }
                         .font(.system(size: 11)).foregroundStyle(Theme.dim)
@@ -203,21 +203,21 @@ struct TradeRow: View {
 
     private func kindName(_ e: Execution) -> String {
         switch e.kind {
-        case .limit?: return "limit"
-        case .market?: return "market"
-        case .takeProfit?: return "take-profit"
-        case .stopLoss?: return "stop-loss"
-        case .liquidation?: return "liquidatie"
+        case .limit?: return T("limit")
+        case .market?: return T("market")
+        case .takeProfit?: return T("take-profit")
+        case .stopLoss?: return T("stop-loss")
+        case .liquidation?: return T("liquidatie")
         case nil: return ""
         }
     }
 
     private func duration(_ s: TimeInterval) -> String {
         let m = Int(s / 60)
-        if m < 60 { return "\(max(m, 1)) min" }
+        if m < 60 { return T("\(max(m, 1)) min") }
         let h = m / 60
-        if h < 48 { return "\(h) u \(m % 60) m" }
-        return "\(h / 24) d \(h % 24) u"
+        if h < 48 { return T("\(h) u \(m % 60) m") }
+        return T("\(h / 24) d \(h % 24) u")
     }
 }
 

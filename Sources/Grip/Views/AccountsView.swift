@@ -40,7 +40,7 @@ struct AccountsView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("ACCOUNTS").font(.system(size: 10.5, weight: .semibold)).tracking(0.8).foregroundStyle(Theme.muted)
+            Text(T("ACCOUNTS")).font(.system(size: 10.5, weight: .semibold)).tracking(0.8).foregroundStyle(Theme.muted)
                 .padding(.horizontal, 14).padding(.top, 16).padding(.bottom, 4)
             ScrollView {
                 VStack(spacing: 4) {
@@ -49,7 +49,7 @@ struct AccountsView: View {
                             .buttonStyle(SidebarButtonStyle(selected: selection == .account(a.id)))
                     }
                     Button { selection = .new } label: {
-                        Label("Account toevoegen", systemImage: "plus.circle.fill")
+                        Label(T("Account toevoegen"), systemImage: "plus.circle.fill")
                             .font(.system(size: 13, weight: .medium))
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, 10).padding(.vertical, 9)
@@ -60,8 +60,8 @@ struct AccountsView: View {
             }
             Spacer()
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Oefenmodus", isOn: $state.paperMode).toggleStyle(.switch).controlSize(.small)
-                Text("Nepgeld, live koersen. Geen account nodig.").font(.system(size: 11)).foregroundStyle(Theme.dim)
+                Toggle(T("Oefenmodus"), isOn: $state.paperMode).toggleStyle(.switch).controlSize(.small)
+                Text(T("Nepgeld, live koersen. Geen account nodig.")).font(.system(size: 11)).foregroundStyle(Theme.dim)
             }
             .padding(14)
         }
@@ -78,11 +78,11 @@ struct AccountRow: View {
                 Text(account.label).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 HStack(spacing: 5) {
                     NetworkPill(network: account.network)
-                    Text(account.canTrade ? "Handelen" : "Alleen-lezen").font(.system(size: 10.5)).foregroundStyle(Theme.muted)
+                    Text(account.canTrade ? T("Handelen") : T("Alleen-lezen")).font(.system(size: 10.5)).foregroundStyle(Theme.muted)
                 }
             }
             Spacer()
-            if active { Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.green).help("Actief account") }
+            if active { Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.green).help(T("Actief account")) }
             StatusDot(ok: account.lastCheckOK)
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
@@ -119,7 +119,7 @@ struct ExchangeIcon: View {
 struct NetworkPill: View {
     let network: HLNetwork
     var body: some View {
-        Text(network.isMainnet ? "MAINNET" : "TESTNET")
+        Text(network.isMainnet ? T("MAINNET") : T("TESTNET"))
             .font(.system(size: 9.5, weight: .bold))
             .padding(.horizontal, 5).padding(.vertical, 1.5)
             .background(RoundedRectangle(cornerRadius: 4).fill((network.isMainnet ? Theme.red : Theme.orange).opacity(0.15)))
@@ -131,7 +131,7 @@ struct StatusDot: View {
     let ok: Bool?
     var body: some View {
         Circle().fill(ok == true ? Theme.green : (ok == false ? Theme.red : Theme.dim)).frame(width: 8, height: 8)
-            .help(ok == true ? "Laatste test geslaagd" : (ok == false ? "Laatste test mislukt" : "Nog niet getest"))
+            .help(ok == true ? T("Laatste test geslaagd") : (ok == false ? T("Laatste test mislukt") : T("Nog niet getest")))
     }
 }
 
@@ -165,9 +165,9 @@ struct ChecklistView: View {
                 HStack(alignment: .top, spacing: 10) {
                     icon(s.status).frame(width: 18, height: 18)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(s.title).font(.system(size: 13, weight: .medium)).foregroundStyle(s.status == .skipped ? Theme.dim : Theme.text)
+                        Text(T(s.title)).font(.system(size: 13, weight: .medium)).foregroundStyle(s.status == .skipped ? Theme.dim : Theme.text)
                         if !s.detail.isEmpty {
-                            Text(s.detail).font(.system(size: 11.5)).foregroundStyle(color(s.status)).fixedSize(horizontal: false, vertical: true)
+                            Text(T(s.detail)).font(.system(size: 11.5)).foregroundStyle(color(s.status)).fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
@@ -214,55 +214,55 @@ struct AddAccountView: View {
     private var addressKind: CredentialKind { Credentials.classify(address) }
     private var keyAddress: String? { (try? EthSigner(privateKeyHex: key.trimmingCharacters(in: .whitespacesAndNewlines)))?.address }
     private var apiURL: URL { URL(string: network.isMainnet ? "https://app.hyperliquid.xyz/API" : "https://app.hyperliquid-testnet.xyz/API")! }
-    private var defaultLabel: String { "Hyperliquid \(network.isMainnet ? "Mainnet" : "Testnet")" }
+    private var defaultLabel: String { T("Hyperliquid \(network.isMainnet ? "Mainnet" : "Testnet")") }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Account koppelen").font(.system(size: 22, weight: .bold))
-                    Text("Grip test de verbinding voordat je opslaat. Je sleutel komt alleen in de macOS-sleutelhanger.")
+                    Text(T("Account koppelen")).font(.system(size: 22, weight: .bold))
+                    Text(T("Grip test de verbinding voordat je opslaat. Je sleutel komt alleen in de macOS-sleutelhanger."))
                         .foregroundStyle(Theme.muted)
                 }
 
-                StepSection(n: 1, title: "Exchange") {
+                StepSection(n: 1, title: T("Exchange")) {
                     HStack(spacing: 10) {
-                        ExchangeCard(name: "Hyperliquid", subtitle: "Perpetuals", selected: true, enabled: true)
-                        ExchangeCard(name: "Meer exchanges", subtitle: "Binnenkort", selected: false, enabled: false)
+                        ExchangeCard(name: T("Hyperliquid"), subtitle: T("Perpetuals"), selected: true, enabled: true)
+                        ExchangeCard(name: T("Meer exchanges"), subtitle: T("Binnenkort"), selected: false, enabled: false)
                     }
                 }
 
-                StepSection(n: 2, title: "Netwerk") {
+                StepSection(n: 2, title: T("Netwerk")) {
                     Picker("", selection: $network) {
-                        Text("Testnet (oefenen)").tag(HLNetwork.testnet)
-                        Text("Mainnet (echt geld)").tag(HLNetwork.mainnet)
+                        Text(T("Testnet (oefenen)")).tag(HLNetwork.testnet)
+                        Text(T("Mainnet (echt geld)")).tag(HLNetwork.mainnet)
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .frame(maxWidth: 360)
                     if network == .mainnet {
-                        Label("Op Mainnet handel je met echt geld.", systemImage: "exclamationmark.triangle.fill")
+                        Label(T("Op Mainnet handel je met echt geld."), systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 12)).foregroundStyle(Theme.orange)
                     }
                 }
 
-                StepSection(n: 3, title: "Adres van je hoofdwallet") {
-                    Text("Het publieke adres waarmee je op Hyperliquid inlogt (begint met 0x). Daarmee ziet Grip je saldo, posities en historie.")
+                StepSection(n: 3, title: T("Adres van je hoofdwallet")) {
+                    Text(T("Het publieke adres waarmee je op Hyperliquid inlogt (begint met 0x). Daarmee ziet Grip je saldo, posities en historie."))
                         .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                     HStack {
-                        TextField("0x…", text: $address)
+                        TextField(T("0x…"), text: $address)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(.body, design: .monospaced))
                             .onChange(of: address) { _, new in
                                 if case .privateKey = Credentials.classify(new) {
                                     // Never keep a private key in a visible field.
                                     address = ""
-                                    addressNotice = "Dat was een private key, geen adres. Hij is uit dit veld gehaald. Een private key hoort alleen bij stap 4, en dan alléén die van een API-wallet."
+                                    addressNotice = T("Dat was een private key, geen adres. Hij is uit dit veld gehaald. Een private key hoort alleen bij stap 4, en dan alléén die van een API-wallet.")
                                 } else if !new.isEmpty {
                                     addressNotice = nil
                                 }
                             }
-                        Button("Plak") { address = NSPasteboard.general.string(forType: .string) ?? "" }
+                        Button(T("Plak")) { address = NSPasteboard.general.string(forType: .string) ?? "" }
                         validity
                     }
                     if let n = addressNotice {
@@ -271,30 +271,30 @@ struct AddAccountView: View {
                     }
                 }
 
-                StepSection(n: 4, title: "API-wallet (om te kunnen handelen)") {
+                StepSection(n: 4, title: T("API-wallet (om te kunnen handelen)")) {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Maak op Hyperliquid een API-wallet aan: **More → API → Generate**, kies een naam (bijv. Grip), klik **Authorize** en kopieer de **private key**. Een API-wallet kan handelen, maar **nooit geld opnemen**.")
+                        Text(T("Maak op Hyperliquid een API-wallet aan: **More → API → Generate**, kies een naam (bijv. Grip), klik **Authorize** en kopieer de **private key**. Een API-wallet kan handelen, maar **nooit geld opnemen**."))
                             .font(.system(size: 12)).foregroundStyle(Theme.muted).fixedSize(horizontal: false, vertical: true)
                         Link(destination: apiURL) {
-                            Label("Open de API-pagina op Hyperliquid \(network.isMainnet ? "" : "Testnet")", systemImage: "arrow.up.right.square")
+                            Label(T("Open de API-pagina op Hyperliquid \(network.isMainnet ? "" : "Testnet")"), systemImage: "arrow.up.right.square")
                                 .font(.system(size: 12, weight: .medium))
                         }
                     }
-                    SecureField("Private key van de API-wallet (laat leeg voor alleen-lezen)", text: $key)
+                    SecureField(T("Private key van de API-wallet (laat leeg voor alleen-lezen)"), text: $key)
                         .textFieldStyle(.roundedBorder)
                         .font(.system(.body, design: .monospaced))
                     if !key.isEmpty {
                         if let a = keyAddress {
-                            Label("Hoort bij API-wallet \(Credentials.mask(a))", systemImage: "key.fill").font(.system(size: 12)).foregroundStyle(Theme.green)
+                            Label(T("Hoort bij API-wallet \(Credentials.mask(a))"), systemImage: "key.fill").font(.system(size: 12)).foregroundStyle(Theme.green)
                         } else {
-                            Label("Dit is geen geldige private key (64 tekens, eventueel met 0x).", systemImage: "xmark.octagon.fill").font(.system(size: 12)).foregroundStyle(Theme.red)
+                            Label(T("Dit is geen geldige private key (64 tekens, eventueel met 0x)."), systemImage: "xmark.octagon.fill").font(.system(size: 12)).foregroundStyle(Theme.red)
                         }
                     } else {
-                        Text("Zonder sleutel: alleen-lezen. Je kunt de sleutel later toevoegen.").font(.system(size: 11.5)).foregroundStyle(Theme.dim)
+                        Text(T("Zonder sleutel: alleen-lezen. Je kunt de sleutel later toevoegen.")).font(.system(size: 11.5)).foregroundStyle(Theme.dim)
                     }
                 }
 
-                StepSection(n: 5, title: "Naam") {
+                StepSection(n: 5, title: T("Naam")) {
                     TextField(defaultLabel, text: $label).textFieldStyle(.roundedBorder).frame(maxWidth: 360)
                 }
 
@@ -307,7 +307,7 @@ struct AddAccountView: View {
                             let net = network, addr = address, k = key.isEmpty ? nil : key
                             test.run { progress in await state.testConnection(network: net, address: addr, key: k, progress: progress) }
                         } label: {
-                            Label(test.running ? "Bezig met testen…" : "Test verbinding", systemImage: "bolt.horizontal.circle")
+                            Label(test.running ? T("Bezig met testen…") : T("Test verbinding"), systemImage: "bolt.horizontal.circle")
                                 .frame(minWidth: 170)
                         }
                         .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
@@ -316,11 +316,11 @@ struct AddAccountView: View {
                         Button {
                             save()
                         } label: {
-                            Label("Opslaan en gebruiken", systemImage: "checkmark").frame(minWidth: 190)
+                            Label(T("Opslaan en gebruiken"), systemImage: "checkmark").frame(minWidth: 190)
                         }
                         .buttonStyle(BigButtonStyle(color: Theme.green))
                         .disabled(!(test.report?.passed ?? false) || test.running)
-                        .help(test.report == nil ? "Test eerst de verbinding" : "")
+                        .help(test.report == nil ? T("Test eerst de verbinding") : "")
                     }
 
                     if !test.steps.isEmpty {
@@ -346,8 +346,8 @@ struct AddAccountView: View {
 
     @ViewBuilder private var validity: some View {
         switch addressKind {
-        case .address: Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.green).help("Geldig adres")
-        case .invalid: Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.red).help("Geen geldig adres")
+        case .address: Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.green).help(T("Geldig adres"))
+        case .invalid: Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.red).help(T("Geen geldig adres"))
         default: EmptyView()
         }
     }
@@ -355,18 +355,18 @@ struct AddAccountView: View {
     @ViewBuilder private func summary(_ r: ConnectionReport) -> some View {
         if let s = r.suggestedAddress {
             HStack {
-                Text("Je hoofdadres is \(Credentials.mask(s)).").font(.system(size: 12.5))
-                Button("Gebruik dit adres") { address = s }
+                Text(T("Je hoofdadres is \(Credentials.mask(s)).")).font(.system(size: 12.5))
+                Button(T("Gebruik dit adres")) { address = s }
             }
         }
         if let n = r.suggestedNetwork {
             HStack {
-                Text("De API-wallet is goedgekeurd op \(n.isMainnet ? "Mainnet" : "Testnet").").font(.system(size: 12.5))
-                Button("Wissel naar \(n.isMainnet ? "Mainnet" : "Testnet")") { network = n }
+                Text(T("De API-wallet is goedgekeurd op \(n.isMainnet ? "Mainnet" : "Testnet").")).font(.system(size: 12.5))
+                Button(T("Wissel naar \(n.isMainnet ? "Mainnet" : "Testnet")")) { network = n }
             }
         }
         if r.passed {
-            Label(r.canTrade ? "Alles werkt. Je kunt opslaan en direct handelen." : "Verbonden (alleen-lezen). Je kunt opslaan; voeg later een API-wallet toe om te handelen.",
+            Label(r.canTrade ? T("Alles werkt. Je kunt opslaan en direct handelen.") : T("Verbonden (alleen-lezen). Je kunt opslaan; voeg later een API-wallet toe om te handelen."),
                   systemImage: "checkmark.seal.fill")
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.green)
         }
@@ -457,7 +457,7 @@ struct AccountDetailView: View {
                 HStack(spacing: 14) {
                     ExchangeIcon(kind: account.exchange).frame(width: 44, height: 44)
                     VStack(alignment: .leading, spacing: 4) {
-                        TextField("Naam", text: $label, onCommit: { state.renameAccount(account.id, to: label) })
+                        TextField(T("Naam"), text: $label, onCommit: { state.renameAccount(account.id, to: label) })
                             .textFieldStyle(.plain)
                             .font(.system(size: 22, weight: .bold))
                         HStack(spacing: 6) {
@@ -467,54 +467,54 @@ struct AccountDetailView: View {
                     }
                     Spacer()
                     if isActive {
-                        Label("Actief", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.green).font(.system(size: 13, weight: .semibold))
+                        Label(T("Actief"), systemImage: "checkmark.circle.fill").foregroundStyle(Theme.green).font(.system(size: 13, weight: .semibold))
                     } else {
-                        Button("Gebruik dit account") { state.activate(account.id) }
+                        Button(T("Gebruik dit account")) { state.activate(account.id) }
                             .buttonStyle(BigButtonStyle(color: Theme.green))
                     }
                 }
 
-                Card(title: "Gegevens") {
+                Card(title: T("Gegevens")) {
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
-                            Text("Hoofdadres").foregroundStyle(Theme.muted).frame(width: 110, alignment: .leading)
+                            Text(T("Hoofdadres")).foregroundStyle(Theme.muted).frame(width: 110, alignment: .leading)
                             Text(revealAddress ? account.address : Credentials.mask(account.address))
                                 .font(.system(.body, design: .monospaced)).textSelection(.enabled)
                             Button { revealAddress.toggle() } label: { Image(systemName: revealAddress ? "eye.slash" : "eye") }
-                                .buttonStyle(HoverButtonStyle(active: false)).help(revealAddress ? "Verbergen" : "Volledig tonen")
+                                .buttonStyle(HoverButtonStyle(active: false)).help(revealAddress ? T("Verbergen") : T("Volledig tonen"))
                             Button {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(account.address, forType: .string)
-                                state.toast("Adres gekopieerd", .info)
+                                state.toast(T("Adres gekopieerd"), .info)
                             } label: { Image(systemName: "doc.on.doc") }
-                                .buttonStyle(HoverButtonStyle(active: false)).help("Kopiëren")
+                                .buttonStyle(HoverButtonStyle(active: false)).help(T("Kopiëren"))
                         }
                         HStack(alignment: .top) {
-                            Text("API-wallet").foregroundStyle(Theme.muted).frame(width: 110, alignment: .leading)
+                            Text(T("API-wallet")).foregroundStyle(Theme.muted).frame(width: 110, alignment: .leading)
                             VStack(alignment: .leading, spacing: 4) {
                                 if let agent = account.agentAddress {
                                     Text("\(Credentials.mask(agent))\(account.agentName.map { $0.isEmpty ? "" : "  ·  “\($0)”" } ?? "")")
                                         .font(.system(.body, design: .monospaced))
-                                    Text("Sleutel: ••••••••  (in de sleutelhanger, nooit zichtbaar)").font(.system(size: 11.5)).foregroundStyle(Theme.dim)
+                                    Text(T("Sleutel: ••••••••  (in de sleutelhanger, nooit zichtbaar)")).font(.system(size: 11.5)).foregroundStyle(Theme.dim)
                                     if let until = account.agentValidUntil {
-                                        Text("Geldig tot \(until.formatted(date: .abbreviated, time: .omitted))").font(.system(size: 11.5)).foregroundStyle(Theme.dim)
+                                        Text(T("Geldig tot \(until.formatted(date: .abbreviated, time: .omitted))")).font(.system(size: 11.5)).foregroundStyle(Theme.dim)
                                     }
                                 } else {
-                                    Text("Geen: alleen-lezen").foregroundStyle(Theme.orange)
+                                    Text(T("Geen: alleen-lezen")).foregroundStyle(Theme.orange)
                                 }
                                 if editingKey {
-                                    SecureField("Private key van de nieuwe API-wallet", text: $newKey)
+                                    SecureField(T("Private key van de nieuwe API-wallet"), text: $newKey)
                                         .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
                                     HStack {
-                                        Button("Opslaan en testen") { replaceKey() }.disabled(newKey.isEmpty)
-                                        Button("Annuleer") { editingKey = false; newKey = ""; keyError = nil }
+                                        Button(T("Opslaan en testen")) { replaceKey() }.disabled(newKey.isEmpty)
+                                        Button(T("Annuleer")) { editingKey = false; newKey = ""; keyError = nil }
                                     }
                                     if let e = keyError { Text(e).font(.system(size: 11.5)).foregroundStyle(Theme.red) }
                                 } else {
                                     HStack {
-                                        Button(account.agentAddress == nil ? "API-wallet toevoegen" : "Sleutel vervangen") { editingKey = true }
+                                        Button(account.agentAddress == nil ? T("API-wallet toevoegen") : T("Sleutel vervangen")) { editingKey = true }
                                         if account.agentAddress != nil {
-                                            Button("Sleutel verwijderen", role: .destructive) {
+                                            Button(T("Sleutel verwijderen"), role: .destructive) {
                                                 try? state.saveAccount(account, key: "")
                                                 runTest()
                                             }
@@ -528,33 +528,33 @@ struct AccountDetailView: View {
                     .font(.system(size: 13))
                 }
 
-                Card(title: "Verbinding") {
+                Card(title: T("Verbinding")) {
                     VStack(alignment: .leading, spacing: 14) {
                         HStack {
                             if let r = test.report {
-                                Label(r.passed ? (r.canTrade ? "Verbonden · handelen werkt" : "Verbonden · alleen-lezen") : "Er is een probleem",
+                                Label(r.passed ? (r.canTrade ? T("Verbonden · handelen werkt") : T("Verbonden · alleen-lezen")) : T("Er is een probleem"),
                                       systemImage: r.passed ? "checkmark.seal.fill" : "exclamationmark.octagon.fill")
                                     .foregroundStyle(r.passed ? Theme.green : Theme.red).font(.system(size: 13, weight: .semibold))
                                 if let v = r.accountValue {
                                     Text(balanceText(v, r)).foregroundStyle(Theme.muted).font(.system(size: 13))
                                 }
                             } else if test.running {
-                                Text("Bezig met testen…").foregroundStyle(Theme.muted)
+                                Text(T("Bezig met testen…")).foregroundStyle(Theme.muted)
                             }
                             Spacer()
-                            Button { runTest() } label: { Label("Test opnieuw", systemImage: "arrow.clockwise") }
+                            Button { runTest() } label: { Label(T("Test opnieuw"), systemImage: "arrow.clockwise") }
                                 .disabled(test.running)
                         }
                         if !test.steps.isEmpty { ChecklistView(steps: test.steps) }
                         if let d = account.lastCheck {
-                            Text("Laatst getest: \(d.formatted(date: .abbreviated, time: .shortened))").font(.system(size: 11)).foregroundStyle(Theme.dim)
+                            Text(T("Laatst getest: \(d.formatted(date: .abbreviated, time: .shortened))")).font(.system(size: 11)).foregroundStyle(Theme.dim)
                         }
                     }
                 }
 
                 HStack {
                     Spacer()
-                    Button(role: .destructive) { confirmDelete = true } label: { Label("Account verwijderen", systemImage: "trash") }
+                    Button(role: .destructive) { confirmDelete = true } label: { Label(T("Account verwijderen"), systemImage: "trash") }
                 }
             }
             .padding(28)
@@ -564,20 +564,20 @@ struct AccountDetailView: View {
             label = account.label
             runTest()
         }
-        .confirmationDialog("“\(account.label)” verwijderen?", isPresented: $confirmDelete) {
-            Button("Verwijderen", role: .destructive) { state.removeAccount(account.id); onDeleted() }
+        .confirmationDialog(T("“\(account.label)” verwijderen?"), isPresented: $confirmDelete) {
+            Button(T("Verwijderen"), role: .destructive) { state.removeAccount(account.id); onDeleted() }
         } message: {
-            Text("Het account en de API-wallet-sleutel worden uit Grip en de sleutelhanger verwijderd. Op Hyperliquid blijft de API-wallet bestaan; die kun je daar intrekken.")
+            Text(T("Het account en de API-wallet-sleutel worden uit Grip en de sleutelhanger verwijderd. Op Hyperliquid blijft de API-wallet bestaan; die kun je daar intrekken."))
         }
     }
 
     private func balanceText(_ v: Double, _ r: ConnectionReport) -> String {
         let f = state.fmt
-        let mode = r.mode.map { " · \($0.label)" } ?? ""
+        let mode = r.mode.map { " · \(T($0.label))" } ?? ""
         if let m = r.mode, !m.balancesOnSpot, let spot = r.spotValue, spot > 0.005 {
-            return "· perps \(f.usd(v, decimals: 2)) + spot \(f.usd(spot, decimals: 2))\(mode)"
+            return T("· perps \(f.usd(v, decimals: 2)) + spot \(f.usd(spot, decimals: 2))\(mode)")
         }
-        return "· saldo \(f.usd(v, decimals: 2))\(mode)"
+        return T("· saldo \(f.usd(v, decimals: 2))\(mode)")
     }
 
     private func runTest() {

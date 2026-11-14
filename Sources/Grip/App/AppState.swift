@@ -8,9 +8,9 @@ enum MainTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .trade: return "Traden"
-        case .history: return "Historie"
-        case .portfolio: return "Portfolio"
+        case .trade: return T("Traden")
+        case .history: return T("Historie")
+        case .portfolio: return T("Portfolio")
         }
     }
 }
@@ -32,9 +32,9 @@ enum PanelMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .risk: return "Risico"
-        case .amount: return "Bedrag"
-        case .position: return "Positie"
+        case .risk: return T("Risico")
+        case .amount: return T("Bedrag")
+        case .position: return T("Positie")
         }
     }
     /// Stored value from older versions (risk / quick / manual).
@@ -52,8 +52,8 @@ enum AmountUnit: String, CaseIterable {
     case margin, notional, coin
     func label(coin: String) -> String {
         switch self {
-        case .margin: return "$ marge"
-        case .notional: return "$ positie"
+        case .margin: return T("$ marge")
+        case .notional: return T("$ positie")
         case .coin: return coin
         }
     }
@@ -333,6 +333,12 @@ final class AppState: ObservableObject {
     /// Max loss of all stops together, in % of the account (0 = off).
     @Published var maxTotalRiskPct: Double = UserDefaults.standard.object(forKey: "maxTotalRiskPct") as? Double ?? 0 { didSet { defaults.set(maxTotalRiskPct, forKey: "maxTotalRiskPct") } }
 
+    /// App language: follows the Mac, or Dutch / English.
+    @Published var language: AppLanguage = AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .system {
+        didSet { defaults.set(language.rawValue, forKey: "language"); L10n.apply(language); chartResetLabels += 1 }
+    }
+    @Published var chartResetLabels = 0
+
     /// Chart indicators (volume first). Shown as chips next to the OHLC line.
     @Published var indicators: [IndicatorConfig] = AppState.loadIndicators() { didSet { saveJSON(indicators, "indicators") } }
     @Published var legendCollapsed: Bool = UserDefaults.standard.bool(forKey: "legendCollapsed") { didSet { defaults.set(legendCollapsed, forKey: "legendCollapsed") } }
@@ -374,6 +380,7 @@ final class AppState: ObservableObject {
     private var paperKey: String { isDemoVideo ? "paper-demo" : "paper-\(network.rawValue)" }
 
     init() {
+        L10n.apply(AppLanguage(rawValue: UserDefaults.standard.string(forKey: "language") ?? "") ?? .system)
         // The demo recording uses live mainnet prices (read-only) with simulated orders.
         let demoRun = UserDefaults.standard.bool(forKey: "GripDemoVideo")
         let storedNet = HLNetwork(rawValue: UserDefaults.standard.string(forKey: "network") ?? "") ?? .testnet
@@ -403,14 +410,14 @@ final class AppState: ObservableObject {
         var appearance = Self.loadJSON(LineAppearance.self, "lineAppearance") ?? LineAppearance()
         if appearance.color == "#F5D547" { appearance.color = LineSwatches.defaultColor }   // old default → your TradingView color
         lineAppearance = appearance
-        coin = defaults.string(forKey: "coin") ?? "BTC"
+        coin = defaults.string(forKey: "coin") ?? T("BTC")
         timeframe = Timeframe(rawValue: defaults.string(forKey: "timeframe") ?? "") ?? .m15
         let demo = UserDefaults.standard.bool(forKey: "GripDemoVideo")
         isDemoVideo = demo
         paperMode = demo || defaults.bool(forKey: "paperMode")
         if demo {
             paper = PaperExchange(balance: 25_000)
-            coin = "BTC"
+            coin = T("BTC")
             timeframe = .m15
             riskPercent = 0.5
             hideAmounts = false
@@ -529,7 +536,7 @@ final class AppState: ObservableObject {
                 guard let self, self.streamConnected != ok else { return }
                 let wasConnected = self.streamConnected
                 self.streamConnected = ok
-                if wasConnected && !ok { self.notify(.connection, "Verbinding met Hyperliquid weg", "Grip probeert opnieuw te verbinden…") }
+                if wasConnected && !ok { self.notify(.connection, T("Verbinding met Hyperliquid weg"), T("Grip probeert opnieuw te verbinden…")) }
             }
         }
         stream.start()
@@ -583,7 +590,7 @@ final class AppState: ObservableObject {
             contexts = c
             if !assets.contains(where: { $0.name == coin }), let first = assets.first { coin = first.name }
         } catch {
-            toast("Kon markten niet laden: \(error.localizedDescription)", .error)
+            toast(T("Kon markten niet laden: \(error.localizedDescription)"), .error)
         }
     }
 
@@ -599,7 +606,7 @@ final class AppState: ObservableObject {
             candles = result
         } catch {
             guard requestID == candleRequestID else { return }
-            toast("Kon koersen niet laden: \(error.localizedDescription)", .error)
+            toast(T("Kon koersen niet laden: \(error.localizedDescription)"), .error)
         }
         loadingCandles = false
     }
@@ -762,7 +769,7 @@ final class AppState: ObservableObject {
 
     func requireSigner() throws -> EthSigner {
         do { return try loadSigner() } catch {
-            throw HLError.exchange("Dit account is alleen-lezen. Voeg een API-wallet toe in het accountscherm (⇧⌘A) om te handelen.")
+            throw HLError.exchange(T("Dit account is alleen-lezen. Voeg een API-wallet toe in het accountscherm (⇧⌘A) om te handelen."))
         }
     }
 
@@ -826,7 +833,7 @@ final class AppState: ObservableObject {
     func resetPaper(balance: Double) {
         paper.reset(balance: balance)
         paperChanged()
-        toast("Oefenaccount gereset naar \(fmt.usd(balance))", .info)
+        toast(T("Oefenaccount gereset naar \(fmt.usd(balance))"), .info)
     }
 
     private func modeChanged() {
@@ -837,7 +844,7 @@ final class AppState: ObservableObject {
         ticket = nil
         pendingOrderPrices = [:]
         if paperMode { paperChanged() } else { accountChanged() }
-        toast(paperMode ? "Oefenmodus aan: live koersen, gesimuleerde orders." : "Oefenmodus uit: je handelt op je echte account.", .info)
+        toast(paperMode ? T("Oefenmodus aan: live koersen, gesimuleerde orders.") : T("Oefenmodus uit: je handelt op je echte account."), .info)
     }
 
     func moveOrder(oid: Int64, to newPrice: Double) async {
@@ -853,7 +860,7 @@ final class AppState: ObservableObject {
         do {
             try await execModify(oid: oid, req)
             if o.isTrigger && o.tpsl == .sl { managed[o.coin]?.stop = px }
-            toast("\(orderName(o)) verplaatst naar \(Fmt.price(px))", .success)
+            toast(T("\(orderName(o)) verplaatst naar \(Fmt.price(px))"), .success)
         } catch {
             pendingOrderPrices[oid] = nil
             toast(error.localizedDescription, .error)
@@ -867,7 +874,7 @@ final class AppState: ObservableObject {
         do {
             try await execCancel(a, oid: oid)
             if o.isTrigger && o.tpsl == .sl { managed[o.coin]?.stop = nil }   // removed on purpose: don't put it back
-            toast("\(orderName(o)) geannuleerd", .info)
+            toast(T("\(orderName(o)) geannuleerd"), .info)
         } catch {
             toast(error.localizedDescription, .error)
         }
@@ -886,9 +893,9 @@ final class AppState: ObservableObject {
         let fee = qty * px * feeRates.taker
         let all = fraction >= 0.999
         pendingConfirm = ConfirmRequest(
-            title: all ? "Hele \(c)-positie sluiten?" : "\(Int(fraction * 100))% van je \(c)-positie sluiten?",
-            message: "\(fmt.size(qty, coin: c, decimals: 4)) market · ≈ \(Fmt.price(px))\nResultaat van dit deel ≈ \(fmt.signedUsd(gross - fee, decimals: 2)) na fees" + (all ? "\nOpen TP- en SL-orders vervallen." : ""),
-            confirmTitle: all ? "Alles sluiten" : "Sluit \(Int(fraction * 100))%", destructive: true) { [weak self] in
+            title: all ? T("Hele \(c)-positie sluiten?") : T("\(Int(fraction * 100))% van je \(c)-positie sluiten?"),
+            message: T("\(fmt.size(qty, coin: c, decimals: 4)) market · ≈ \(Fmt.price(px))\nResultaat van dit deel ≈ \(fmt.signedUsd(gross - fee, decimals: 2)) na fees") + (all ? T("\nOpen TP- en SL-orders vervallen.") : ""),
+            confirmTitle: all ? T("Alles sluiten") : T("Sluit \(Int(fraction * 100))%"), destructive: true) { [weak self] in
                 Task { await self?.closePosition(fraction: fraction, coin: c) }
             }
     }
@@ -898,7 +905,7 @@ final class AppState: ObservableObject {
         guard let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return }
         let price = mids[c] ?? (c == coin ? self.price : pos.entryPx)
         let size = min(abs(pos.size), HLFormat.roundSize(abs(pos.size) * fraction, szDecimals: a.szDecimals))
-        guard size > 0 else { toast("Te kleine hoeveelheid om te sluiten.", .error); return }
+        guard size > 0 else { toast(T("Te kleine hoeveelheid om te sluiten."), .error); return }
         let isBuy = !pos.isLong
         let px = HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
         busy = true
@@ -908,11 +915,11 @@ final class AppState: ObservableObject {
             if case .filled? = st.first {
                 // announced via `announce` when the fill arrives
             } else {
-                toast("Sluitorder verstuurd.", .info)
+                toast(T("Sluitorder verstuurd."), .info)
             }
         } catch {
             toast(error.localizedDescription, .error)
-            notify(.orderProblem, "Sluiten mislukt", error.localizedDescription)
+            notify(.orderProblem, T("Sluiten mislukt"), error.localizedDescription)
         }
         await refreshAccount()
         await refreshHistory()
@@ -926,7 +933,7 @@ final class AppState: ObservableObject {
         guard size > 0 else { return }
         do {
             _ = try await execOrders([OrderRequest(asset: a, isBuy: !pos.isLong, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Gtc"))])
-            toast("Close-order: \(Int(dragCloseFraction * 100))% @ \(Fmt.price(px))", .success)
+            toast(T("Close-order: \(Int(dragCloseFraction * 100))% @ \(Fmt.price(px))"), .success)
         } catch {
             toast(error.localizedDescription, .error)
         }
@@ -942,7 +949,7 @@ final class AppState: ObservableObject {
                                kind: .trigger(triggerPx: px, isMarket: true, tpsl: kind))
         do {
             _ = try await execOrders([req], grouping: "positionTpsl")
-            toast("\(kind == .tp ? "Take-profit" : "Stop-loss") toegevoegd @ \(Fmt.price(px)) – sleep de lijn om aan te passen", .success)
+            toast(T("\(kind == .tp ? "Take-profit" : "Stop-loss") toegevoegd @ \(Fmt.price(px)) – sleep de lijn om aan te passen"), .success)
         } catch {
             toast(error.localizedDescription, .error)
         }
@@ -950,9 +957,9 @@ final class AppState: ObservableObject {
     }
 
     func orderName(_ o: OpenOrder) -> String {
-        if o.isTrigger { return o.tpsl == .tp ? "Take-profit" : "Stop-loss" }
-        if o.reduceOnly { return "Close-order" }
-        return "Limit order"
+        if o.isTrigger { return o.tpsl == .tp ? T("Take-profit") : T("Stop-loss") }
+        if o.reduceOnly { return T("Close-order") }
+        return T("Limit order")
     }
 
     // MARK: Chart lines
@@ -1003,48 +1010,48 @@ final class AppState: ObservableObject {
         let eq = max(account.accountValue, 1)
         switch id {
         case .ticketEntry(let i):
-            guard let t = ticket, let pl = plan else { return "ENTRY \(Fmt.price(px))" }
+            guard let t = ticket, let pl = plan else { return T("ENTRY \(Fmt.price(px))") }
             let sz = pl.entrySizes.indices.contains(i) ? pl.entrySizes[i] : 0
-            if t.reduceOnly { return "VERKLEIN \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(f.signedUsd(pl.reducePnl ?? 0))" }
-            let side = t.isLong ? "LONG" : "SHORT"
+            if t.reduceOnly { return T("VERKLEIN \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(f.signedUsd(pl.reducePnl ?? 0))") }
+            let side = t.isLong ? T("LONG") : T("SHORT")
             if t.entries.count == 1 {
-                return "\(pl.isAdd ? "BIJ" : "LIMIT") \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×"
+                return T("\(pl.isAdd ? "BIJ" : "LIMIT") \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×")
             }
-            return "E\(i + 1) · \(Int(t.entries[i].pct))%  \(f.size(sz, coin: coin, decimals: szDecimals))"
+            return T("E\(i + 1) · \(Int(t.entries[i].pct))%  \(f.size(sz, coin: coin, decimals: szDecimals))")
         case .ticketSL:
-            guard let pl = plan, let risk = pl.riskUsd else { return "SL \(Fmt.price(px))" }
-            return "SL\(pl.isAdd ? " hele positie" : "")  \(f.signedUsd(-risk))  (−\(Fmt.number(pl.riskPercentActual ?? 0, decimals: 2))%)"
+            guard let pl = plan, let risk = pl.riskUsd else { return T("SL \(Fmt.price(px))") }
+            return T("SL\(pl.isAdd ? " hele positie" : "")  \(f.signedUsd(-risk))  (−\(Fmt.number(pl.riskPercentActual ?? 0, decimals: 2))%)")
         case .ticketTP(let i):
-            guard let t = ticket, t.tps.indices.contains(i), let pl = plan else { return "TP \(Fmt.price(px))" }
+            guard let t = ticket, t.tps.indices.contains(i), let pl = plan else { return T("TP \(Fmt.price(px))") }
             let lvl = t.tps[i]
             let avg = pl.after.avgEntry
             let qty = pl.after.size * lvl.pct / 100
             let profit = qty * (t.isLong ? px - avg : avg - px) - qty * feeRates.maker * (avg + px)
-            let rr = t.useStopLoss ? " · \(Fmt.number(abs(px - avg) / max(abs(avg - t.stopLoss), 1e-12), decimals: 1))R" : ""
-            return "TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))\(rr)"
+            let rr = t.useStopLoss ? T(" · \(Fmt.number(abs(px - avg) / max(abs(avg - t.stopLoss), 1e-12), decimals: 1))R") : ""
+            return T("TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))\(rr)")
         case .ticketLiq:
-            return "LIQ ≈ \(Fmt.price(px))"
+            return T("LIQ ≈ \(Fmt.price(px))")
         case .pendingTP(let i):
             let n = managed[coin]?.tps?.prices.count ?? 1
             let pct = Int(((managed[coin]?.tps?.fractions[safe: i] ?? 1) * 100).rounded())
-            return "TP\(n > 1 ? "\(i + 1)" : "") · \(pct)%  wacht op entry"
+            return T("TP\(n > 1 ? "\(i + 1)" : "") · \(pct)%  wacht op entry")
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
             if let pos = position, o.reduceOnly || o.isTrigger {
                 let qty = o.size > 0 ? min(o.size, abs(pos.size)) : abs(pos.size)
                 let pnl = (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1)
-                let name = o.isTrigger ? (o.tpsl == .tp ? "TP" : "SL") : "SLUIT \(Int((qty / abs(pos.size) * 100).rounded()))%"
+                let name = o.isTrigger ? (o.tpsl == .tp ? "TP" : "SL") : T("SLUIT \(Int((qty / abs(pos.size) * 100).rounded()))%")
                 return "\(name)  \(f.signedUsd(pnl))  (\(Fmt.percent(pnl / eq, decimals: 1)))"
             }
-            return "LIMIT \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))"
+            return T("LIMIT \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))")
         case .position:
             guard let pos = position else { return "" }
             let net = positionNet ?? 0
-            return "\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  ·  gem. \(Fmt.price(pos.entryPx))  ·  netto \(f.signedUsd(net, decimals: 2))  (\(Fmt.percent(net / eq, decimals: 2)))"
+            return T("\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  ·  gem. \(Fmt.price(pos.entryPx))  ·  netto \(f.signedUsd(net, decimals: 2))  (\(Fmt.percent(net / eq, decimals: 2)))")
         case .breakEven:
-            return "BE \(Fmt.price(px))  ·  break-even na fees\((openTrade?.funding ?? 0) != 0 ? " + funding" : "")"
+            return T("BE \(Fmt.price(px))  ·  break-even na fees\((openTrade?.funding ?? 0) != 0 ? " + funding" : "")")
         case .liquidation:
-            return "LIQ \(Fmt.price(px))"
+            return T("LIQ \(Fmt.price(px))")
         }
     }
 
@@ -1052,7 +1059,7 @@ final class AppState: ObservableObject {
         guard let pos = position else { return "" }
         let qty = abs(pos.size) * dragCloseFraction
         let pnl = (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1)
-        return "SLUIT \(Int(dragCloseFraction * 100))%  @ \(Fmt.price(px))  \(fmt.signedUsd(pnl))"
+        return T("SLUIT \(Int(dragCloseFraction * 100))%  @ \(Fmt.price(px))  \(fmt.signedUsd(pnl))")
     }
 
     func chartLineDragged(_ id: LineID, price raw: Double, ended: Bool) {
@@ -1092,7 +1099,7 @@ final class AppState: ObservableObject {
 
     /// ⌥H / ⌥V: a horizontal or vertical line where the mouse is.
     func addLineAtCursor(vertical: Bool) {
-        guard let p = chartCanvas?.cursorPoint() else { toast("Beweeg de muis over de chart en druk dan nog eens.", .info); return }
+        guard let p = chartCanvas?.cursorPoint() else { toast(T("Beweeg de muis over de chart en druk dan nog eens."), .info); return }
         if vertical {
             var ap = lineAppearance
             ap.extendLeft = true
@@ -1178,7 +1185,8 @@ final class AppState: ObservableObject {
 
     // MARK: Toasts
 
-    func toast(_ text: String, _ kind: Toast.Kind = .info) {
+    func toast(_ raw: String, _ kind: Toast.Kind = .info) {
+        let text = T(raw)      // also translates messages from Hyperliquid and the core
         if kind == .error { NSLog("Grip error: %@", text) }
         let t = Toast(text: text, kind: kind)
         withAnimation(.easeOut(duration: 0.2)) { toasts.append(t) }
@@ -1218,7 +1226,7 @@ extension AppState {
         reconnectStream()
         Task {
             await refreshAll()
-            toast("Ververst", .info)
+            toast(T("Ververst"), .info)
         }
     }
 }
@@ -1248,7 +1256,7 @@ extension AppState {
     func pref(_ e: TradeEvent) -> EventPref { eventPrefs[e.rawValue] ?? e.defaultPref }
 
     func notify(_ e: TradeEvent, _ title: String, _ body: String) {
-        Notifier.shared.post(e, title: title, body: body, pref: pref(e), important: e == .entryFilled || e == .stopLoss || e == .takeProfit || e == .positionClosed)
+        Notifier.shared.post(e, title: T(title), body: T(body), pref: pref(e), important: e == .entryFilled || e == .stopLoss || e == .takeProfit || e == .positionClosed)
     }
 
     /// Turns new fills into clear messages: entry, take-profit, stop-loss, closed trade with net result.
@@ -1265,8 +1273,8 @@ extension AppState {
             let opening = abs(end) > abs(start) - 1e-12 && (start == 0 || (start > 0) == (end > 0))
             let sizeText = fmt.size(qty, coin: c, decimals: 4)
             if opening {
-                let side = end > 0 ? "Long" : "Short"
-                notify(.entryFilled, start == 0 ? "\(side) \(c) geopend" : "\(side) \(c) bijgekocht", "\(sizeText) @ \(Fmt.price(px))")
+                let side = end > 0 ? T("Long") : T("Short")
+                notify(.entryFilled, start == 0 ? T("\(side) \(c) geopend") : T("\(side) \(c) bijgekocht"), "\(sizeText) @ \(Fmt.price(px))")
                 toast("\(start == 0 ? "In trade" : "Bijgekocht"): \(side.lowercased()) \(sizeText) @ \(Fmt.price(px))", .success)
                 continue
             }
@@ -1274,20 +1282,20 @@ extension AppState {
             let kind = orderKinds[first.oid]
             if abs(end) < 1e-9, let trade = analysis.closed.first(where: { $0.coin == c }) {
                 let r = trade.rMultiple.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? ""
-                let how = kind == .stopLoss ? "Stop-loss" : (kind == .takeProfit ? "Take-profit" : "Gesloten")
+                let how = kind == .stopLoss ? T("Stop-loss") : (kind == .takeProfit ? T("Take-profit") : T("Gesloten"))
                 notify(trade.isWin ? .positionClosed : (kind == .stopLoss ? .stopLoss : .positionClosed),
-                       "\(c)-trade gesloten (\(how))", "Netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r) · fees \(fmt.usd(trade.fees, decimals: 2))")
-                toast("Trade gesloten: netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r)", trade.isWin ? .success : .info)
+                       T("\(c)-trade gesloten (\(how))"), T("Netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r) · fees \(fmt.usd(trade.fees, decimals: 2))"))
+                toast(T("Trade gesloten: netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r)"), trade.isWin ? .success : .info)
             } else if kind == .stopLoss {
-                notify(.stopLoss, "Stop-loss \(c) geraakt", "\(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
-                toast("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))", .info)
+                notify(.stopLoss, T("Stop-loss \(c) geraakt"), "\(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
+                toast(T("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))"), .info)
             } else {
-                let label = analysis.open[c]?.executions.last(where: { $0.oid == first.oid })?.label ?? "Deel"
+                let label = analysis.open[c]?.executions.last(where: { $0.oid == first.oid })?.label ?? T("Deel")
                 if kind == .takeProfit && breakEvenAfterTP.contains(c) {
                     Task { await self.refreshAccount(); await self.moveStopToBreakEven(coin: c) }
                 }
-                notify(kind == .takeProfit ? .takeProfit : .positionClosed, "\(label) \(c) gevuld", "\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
-                toast("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))", realized >= 0 ? .success : .info)
+                notify(kind == .takeProfit ? .takeProfit : .positionClosed, T("\(label) \(c) gevuld"), T("\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"))
+                toast(T("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"), realized >= 0 ? .success : .info)
             }
         }
     }
@@ -1320,7 +1328,7 @@ extension AppState {
             var lines = ["\(e.label) · \(e.isBuy ? "Koop" : "Verkoop") \(f.size(e.size, coin: e.coin, decimals: 4))",
                          "@ \(Fmt.price(e.price))  ·  \(when)",
                          "Fee \(f.usd(e.fee, decimals: 2))\(e.fills > 1 ? "  ·  \(e.fills) fills" : "")"]
-            if e.role == .exit { lines.append("Resultaat \(f.signedUsd(e.closedPnl - e.fee, decimals: 2))") }
+            if e.role == .exit { lines.append(T("Resultaat \(f.signedUsd(e.closedPnl - e.fee, decimals: 2))")) }
             return ChartMarker(id: e.id, time: e.time, price: e.price, isBuy: e.isBuy, label: e.label, detail: lines, tradeID: e.tradeID)
         }
     }
@@ -1351,10 +1359,10 @@ extension AppState {
 
     var menuBarTitle: String {
         let positions = account.positions
-        guard !positions.isEmpty else { return "Grip" }
+        guard !positions.isEmpty else { return T("Grip") }
         let total = positions.reduce(0) { $0 + net(for: $1) }
         if positions.count == 1, let p = positions.first { return "\(p.coin) \(fmt.signedUsd(total, decimals: 2))" }
-        return "\(positions.count) pos. \(fmt.signedUsd(total, decimals: 2))"
+        return T("\(positions.count) pos. \(fmt.signedUsd(total, decimals: 2))")
     }
 }
 
@@ -1386,7 +1394,7 @@ extension AppState {
         if network != a.network { network = a.network }
         accountAddress = a.address
         reloadAgent()
-        toast("Actief account: \(a.label)", .success)
+        toast(T("Actief account: \(a.label)"), .success)
     }
 
     /// Saves a new or edited account. `key` = API-wallet private key (nil keeps the current one, "" = read-only).
@@ -1417,7 +1425,7 @@ extension AppState {
         Keychain.delete(account: a.keychainAccount)
         accounts.removeAll { $0.id == id }
         if activeAccountID == id { activate(accounts.first?.id) }
-        toast("Account “\(a.label)” verwijderd (ook de sleutel uit de sleutelhanger).", .info)
+        toast(T("Account “\(a.label)” verwijderd (ook de sleutel uit de sleutelhanger)."), .info)
     }
 
     func renameAccount(_ id: UUID, to label: String) {
@@ -1463,13 +1471,13 @@ extension AppState {
         switch Credentials.classify(legacy) {
         case .privateKey:
             d.removeObject(forKey: "accountAddress")
-            notice = "In het adresveld stond een private key in plaats van een adres. Grip heeft die verwijderd. Was het de sleutel van je hoofdwallet, zet je geld dan voor de zekerheid over naar een nieuwe wallet. Was het een API-wallet, maak dan een nieuwe aan."
+            notice = T("In het adresveld stond een private key in plaats van een adres. Grip heeft die verwijderd. Was het de sleutel van je hoofdwallet, zet je geld dan voor de zekerheid over naar een nieuwe wallet. Was het een API-wallet, maak dan een nieuwe aan.")
         case .address(let addr) where accounts.isEmpty:
             for n in [net] + HLNetwork.allCases.filter({ $0 != net }) {
                 let legacyKey = "agent-\(n.rawValue)"
                 let key = Keychain.load(account: legacyKey)
                 if n != net && key == nil { continue }
-                var acct = ExchangeAccount(network: n, label: "Hyperliquid \(n.isMainnet ? "Mainnet" : "Testnet")", address: addr)
+                var acct = ExchangeAccount(network: n, label: T("Hyperliquid \(n.isMainnet ? "Mainnet" : "Testnet")"), address: addr)
                 if let key, let signer = try? EthSigner(privateKeyHex: key) {
                     do {
                         try Keychain.save(key, account: acct.keychainAccount)

@@ -24,9 +24,9 @@ extension AppState {
             try await execModify(oid: sl.oid, req)
             managed[c]?.stop = px
             breakEvenAfterTP.remove(c)
-            toast("Stop-loss naar break-even: \(Fmt.price(px))", .success)
+            toast(T("Stop-loss naar break-even: \(Fmt.price(px))"), .success)
         } catch {
-            toast("Stop niet verplaatst: \(error.localizedDescription)", .error)
+            toast(T("Stop niet verplaatst: \(error.localizedDescription)"), .error)
         }
         await refreshAccount()
     }
@@ -51,25 +51,25 @@ extension AppState {
         let p = price
         var items: [(String, @MainActor () -> Void)] = []
         if let t = ticket {
-            items.append((t.entries.count > 1 ? "E1 hier" : "Entry hier", { [weak self] in self?.ticket?.entry = px; self?.ticket?.isMarket = false }))
-            items.append(("Extra entry hier", { [weak self] in self?.addTicketEntry(at: px) }))
+            items.append((t.entries.count > 1 ? T("E1 hier") : T("Entry hier"), { [weak self] in self?.ticket?.entry = px; self?.ticket?.isMarket = false }))
+            items.append((T("Extra entry hier"), { [weak self] in self?.addTicketEntry(at: px) }))
             if !t.reduceOnly {
                 if t.isLong ? px < t.entry : px > t.entry {
-                    items.append(("Stop-loss hier", { [weak self] in self?.ticket?.stopLoss = px; self?.ticket?.useStopLoss = true }))
+                    items.append((T("Stop-loss hier"), { [weak self] in self?.ticket?.stopLoss = px; self?.ticket?.useStopLoss = true }))
                 } else {
-                    items.append(("Take-profit hier", { [weak self] in self?.addTicketTP(at: px) }))
+                    items.append((T("Take-profit hier"), { [weak self] in self?.addTicketTP(at: px) }))
                 }
             }
             items.append(("-", {}))
         }
         if let pos = position, ticket == nil {
-            items.append(("Bijkopen hier (\(pos.isLong ? "long" : "short"))", { [weak self] in self?.newTicket(long: pos.isLong, entry: px) }))
+            items.append((T("Bijkopen hier (\(pos.isLong ? "long" : "short"))"), { [weak self] in self?.newTicket(long: pos.isLong, entry: px) }))
         } else if p > 0 && ticket == nil {
-            items.append((px < p ? "Limit long hier" : "Limit short hier", { [weak self] in self?.newTicket(long: px < p, entry: px) }))
+            items.append((px < p ? T("Limit long hier") : T("Limit short hier"), { [weak self] in self?.newTicket(long: px < p, entry: px) }))
         }
         if position != nil {
             items.append(("-", {}))
-            items.append(("Positie deels sluiten hier (\(Int(dragCloseFraction * 100))%)", { [weak self] in Task { await self?.closeAtLimit(price: px) } }))
+            items.append((T("Positie deels sluiten hier (\(Int(dragCloseFraction * 100))%)"), { [weak self] in Task { await self?.closeAtLimit(price: px) } }))
         }
         return items
     }
@@ -82,9 +82,9 @@ extension AppState {
         if let pos = position, pos.isLong != long {
             let side = pos.isLong ? "long" : "short"
             pendingConfirm = ConfirmRequest(
-                title: "Je zit \(side) in \(coin)",
-                message: "Een market \(long ? "long" : "short") zou je \(side) verkleinen in plaats van een nieuwe trade te openen. Wil je je positie sluiten?",
-                confirmTitle: "Hele positie sluiten", destructive: true) { [weak self] in Task { await self?.closePosition(fraction: 1) } }
+                title: T("Je zit \(side) in \(coin)"),
+                message: T("Een market \(long ? "long" : "short") zou je \(side) verkleinen in plaats van een nieuwe trade te openen. Wil je je positie sluiten?"),
+                confirmTitle: T("Hele positie sluiten"), destructive: true) { [weak self] in Task { await self?.closePosition(fraction: 1) } }
             return
         }
         if panelMode != .amount { panelMode = .amount }
@@ -112,7 +112,7 @@ extension AppState {
 
     /// Saves the chart (with a title banner) to the screenshot folder and copies it to the clipboard.
     func takeScreenshot() {
-        guard let canvas = chartCanvas, let chart = canvas.snapshotImage() else { toast("Geen chart om vast te leggen.", .error); return }
+        guard let canvas = chartCanvas, let chart = canvas.snapshotImage() else { toast(T("Geen chart om vast te leggen."), .error); return }
         let banner: CGFloat = 34
         let size = NSSize(width: chart.size.width, height: chart.size.height + banner)
         let img = NSImage(size: size)
@@ -121,11 +121,11 @@ extension AppState {
         NSRect(origin: .zero, size: size).fill()
         chart.draw(in: NSRect(x: 0, y: 0, width: chart.size.width, height: chart.size.height))
         let ch = change24h
-        let title = "\(coin)-PERP · \(timeframe.label) · \(Fmt.price(price))  \(ch >= 0 ? "+" : "")\(Fmt.number(ch * 100, decimals: 2))%"
+        let title = T("\(coin)-PERP · \(timeframe.label) · \(Fmt.price(price))  \(ch >= 0 ? "+" : "")\(Fmt.number(ch * 100, decimals: 2))%")
         let when = Date().formatted(date: .abbreviated, time: .shortened)
         (title as NSString).draw(at: NSPoint(x: 14, y: chart.size.height + 9),
                                  withAttributes: [.font: NSFont.systemFont(ofSize: 14, weight: .semibold), .foregroundColor: NSColor.white])
-        let right = "Grip · \(when)" as NSString
+        let right = T("Grip · \(when)") as NSString
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.secondaryLabelColor]
         right.draw(at: NSPoint(x: size.width - right.size(withAttributes: attrs).width - 14, y: chart.size.height + 10), withAttributes: attrs)
         img.unlockFocus()
@@ -145,9 +145,9 @@ extension AppState {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try png.write(to: file)
             Notifier.shared.playShutter()
-            toast("Screenshot bewaard\(screenshotToClipboard ? " en gekopieerd" : "") · \(file.lastPathComponent)", .success)
+            toast(T("Screenshot bewaard\(screenshotToClipboard ? " en gekopieerd" : "") · \(file.lastPathComponent)"), .success)
         } catch {
-            toast("Screenshot niet bewaard: \(error.localizedDescription)", .error)
+            toast(T("Screenshot niet bewaard: \(error.localizedDescription)"), .error)
         }
     }
 
@@ -162,7 +162,7 @@ extension AppState {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.prompt = "Kies map"
+        panel.prompt = T("Kies map")
         panel.directoryURL = URL(fileURLWithPath: (screenshotFolder as NSString).expandingTildeInPath)
         if panel.runModal() == .OK, let u = panel.url { screenshotFolder = u.path }
     }

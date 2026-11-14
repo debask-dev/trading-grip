@@ -10,13 +10,13 @@ enum TradeEvent: String, CaseIterable, Identifiable, Codable {
 
     var label: String {
         switch self {
-        case .orderPlaced: return "Order geplaatst"
-        case .entryFilled: return "Entry gevuld (in trade)"
-        case .takeProfit: return "Take-profit geraakt"
-        case .stopLoss: return "Stop-loss geraakt"
-        case .positionClosed: return "Trade gesloten"
-        case .orderProblem: return "Order geweigerd of mislukt"
-        case .connection: return "Verbinding weg / terug"
+        case .orderPlaced: return T("Order geplaatst")
+        case .entryFilled: return T("Entry gevuld (in trade)")
+        case .takeProfit: return T("Take-profit geraakt")
+        case .stopLoss: return T("Stop-loss geraakt")
+        case .positionClosed: return T("Trade gesloten")
+        case .orderProblem: return T("Order geweigerd of mislukt")
+        case .connection: return T("Verbinding weg / terug")
         }
     }
 

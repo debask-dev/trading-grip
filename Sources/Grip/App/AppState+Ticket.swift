@@ -117,9 +117,9 @@ extension AppState {
         if let pos, pos.isLong != long, panelMode != .position {
             let side = pos.isLong ? "long" : "short"
             pendingConfirm = ConfirmRequest(
-                title: "Je zit \(side) in \(coin)",
-                message: "Hyperliquid heeft één positie per munt. Een \(long ? "long" : "short")-order opent geen aparte trade, maar maakt je \(side) kleiner.\nVerkleinen of sluiten doe je in het tabblad Positie.",
-                confirmTitle: "Naar Positie", destructive: false) { [weak self] in
+                title: T("Je zit \(side) in \(coin)"),
+                message: T("Hyperliquid heeft één positie per munt. Een \(long ? "long" : "short")-order opent geen aparte trade, maar maakt je \(side) kleiner.\nVerkleinen of sluiten doe je in het tabblad Positie."),
+                confirmTitle: T("Naar Positie"), destructive: false) { [weak self] in
                     self?.panelMode = .position
                 }
             return
@@ -363,10 +363,10 @@ extension AppState {
         guard let t = ticket, let pl = plan else { return }
         guard t.isMarket && confirmMarketOrders else { Task { await placeTicket() }; return }
         let side = t.isLong ? "long" : "short"
-        let what = t.reduceOnly ? "Verkleinen (market)" : (pl.isAdd ? "Market bijkopen (\(side))" : "Market \(side) openen")
-        var msg = "\(fmt.size(pl.entrySizes.first ?? 0, coin: coin, decimals: szDecimals)) · ≈ \(Fmt.price(price)) · \(t.leverage ?? pl.leverage)×"
-        if let risk = pl.riskUsd { msg += "\nRisico tot je stop: \(fmt.usd(-risk, decimals: 2))\(pl.isAdd ? " voor de hele positie" : "")" }
-        if let r = pl.reducePnl { msg += "\nResultaat van dit deel ≈ \(fmt.signedUsd(r, decimals: 2))" }
+        let what = t.reduceOnly ? T("Verkleinen (market)") : (pl.isAdd ? T("Market bijkopen (\(side))") : T("Market \(side) openen"))
+        var msg = T("\(fmt.size(pl.entrySizes.first ?? 0, coin: coin, decimals: szDecimals)) · ≈ \(Fmt.price(price)) · \(t.leverage ?? pl.leverage)×")
+        if let risk = pl.riskUsd { msg += T("\nRisico tot je stop: \(fmt.usd(-risk, decimals: 2))\(pl.isAdd ? " voor de hele positie" : "")") }
+        if let r = pl.reducePnl { msg += T("\nResultaat van dit deel ≈ \(fmt.signedUsd(r, decimals: 2))") }
         pendingConfirm = ConfirmRequest(title: what + "?", message: msg, confirmTitle: what, destructive: t.reduceOnly) { [weak self] in
             Task { await self?.placeTicket() }
         }
@@ -374,12 +374,12 @@ extension AppState {
 
     func placeTicket() async {
         guard let t = ticket, let a = asset, let pl = plan else { return }
-        guard pl.size > 0 else { toast("Vul een grootte in.", .error); return }
-        guard hasAccount else { toast("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan.", .error); return }
+        guard pl.size > 0 else { toast(T("Vul een grootte in."), .error); return }
+        guard hasAccount else { toast(T("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan."), .error); return }
         for (k, s) in pl.entrySizes.enumerated() where s > 0 {
             let px = t.isMarket && k == 0 ? price : t.entries[k].price
             if s * px < 10 && !t.reduceOnly {
-                toast(t.entries.count > 1 ? "E\(k + 1) is kleiner dan $10, het minimum van Hyperliquid." : "Hyperliquid vereist minimaal $10 per order.", .error)
+                toast(t.entries.count > 1 ? T("E\(k + 1) is kleiner dan $10, het minimum van Hyperliquid.") : T("Hyperliquid vereist minimaal $10 per order."), .error)
                 return
             }
         }
@@ -410,7 +410,7 @@ extension AppState {
 
             if t.reduceOnly {
                 try throwIfRejected(try await execOrders(reqs))
-                toast("Verkleinorder\(entryCount > 1 ? "s" : "") geplaatst: \(fmt.size(pl.size, coin: c, decimals: a.szDecimals))", .success)
+                toast(T("Verkleinorder\(entryCount > 1 ? "s" : "") geplaatst: \(fmt.size(pl.size, coin: c, decimals: a.szDecimals))"), .success)
                 ticket = nil
                 await refreshAccount()
                 await refreshHistory()
@@ -474,26 +474,26 @@ extension AppState {
             let resting = statuses.prefix(entryCount).filter { if case .resting = $0 { return true } else { return false } }.count
             let side = isBuy ? "long" : "short"
             if resting > 0, m.tps != nil {
-                toast("Take-profits worden geplaatst zodra je entry gevuld is (zie de lichte lijnen in de chart).", .info)
+                toast(T("Take-profits worden geplaatst zodra je entry gevuld is (zie de lichte lijnen in de chart)."), .info)
             }
             if resting > 0 {
-                let what = pl.isAdd ? "Bijkoop-order\(resting > 1 ? "s" : "")" : (resting > 1 ? "\(resting) entries" : "Limit \(side)")
-                toast("\(what) geplaatst · \(t.leverage ?? pl.leverage)×", .success)
-                notify(.orderPlaced, "\(what) geplaatst", "\(c) \(side) · \(fmt.size(pl.size, coin: c, decimals: a.szDecimals))")
+                let what = pl.isAdd ? T("Bijkoop-order\(resting > 1 ? "s" : "")") : (resting > 1 ? T("\(resting) entries") : T("Limit \(side)"))
+                toast(T("\(what) geplaatst · \(t.leverage ?? pl.leverage)×"), .success)
+                notify(.orderPlaced, T("\(what) geplaatst"), "\(c) \(side) · \(fmt.size(pl.size, coin: c, decimals: a.szDecimals))")
             } else if !filled {
-                toast("Order verstuurd.", .success)
+                toast(T("Order verstuurd."), .success)
             }
             if !rejected.isEmpty {
                 let msg = Array(Set(rejected)).joined(separator: " · ")
-                toast("Niet alles geplaatst: \(msg)", .error)
-                notify(.orderProblem, "Order deels geweigerd", msg)
+                toast(T("Niet alles geplaatst: \(msg)"), .error)
+                notify(.orderProblem, T("Order deels geweigerd"), msg)
             }
             ticket = nil
             await refreshAccount()
             if filled { await refreshHistory() }
         } catch {
             toast(error.localizedDescription, .error)
-            notify(.orderProblem, "Order niet geplaatst", error.localizedDescription)
+            notify(.orderProblem, T("Order niet geplaatst"), error.localizedDescription)
         }
     }
 
@@ -522,12 +522,12 @@ extension AppState {
                     try await execute(action, coin: c, asset: a, isLong: m.isLong)
                 } catch {
                     ok = false
-                    toast("\(describe(action)) mislukt: \(error.localizedDescription)", .error)
-                    notify(.orderProblem, "\(describe(action)) mislukt", "\(c): \(error.localizedDescription)")
+                    toast(T("\(describe(action)) mislukt: \(error.localizedDescription)"), .error)
+                    notify(.orderProblem, T("\(describe(action)) mislukt"), "\(c): \(error.localizedDescription)")
                 }
             }
             if step.cancelledEntries > 0 {
-                toast("\(c)-trade gesloten: \(step.cancelledEntries) niet-gevulde entr\(step.cancelledEntries > 1 ? "ies" : "y") geannuleerd", .info)
+                toast(T("\(c)-trade gesloten: \(step.cancelledEntries) niet-gevulde entr\(step.cancelledEntries > 1 ? "ies" : "y") geannuleerd"), .info)
             }
             if ok {
                 managed[c] = step.next
@@ -538,7 +538,7 @@ extension AppState {
                 retry.failures += 1
                 if retry.failures >= 3 {
                     managed[c] = step.next
-                    notify(.orderProblem, "Grip stopt met bijwerken van \(c)", "Controleer je stop-loss en take-profits zelf.")
+                    notify(.orderProblem, T("Grip stopt met bijwerken van \(c)"), T("Controleer je stop-loss en take-profits zelf."))
                 } else {
                     managed[c] = retry
                 }
@@ -556,11 +556,11 @@ extension AppState {
 
     private func describe(_ a: KeeperAction) -> String {
         switch a {
-        case .cancel: return "Entry annuleren"
-        case .placeStop: return "Stop-loss plaatsen"
-        case .resizeStop: return "Stop-loss bijwerken"
-        case .placeTakeProfits: return "Take-profits plaatsen"
-        case .resizeTakeProfit: return "Take-profit vergroten"
+        case .cancel: return T("Entry annuleren")
+        case .placeStop: return T("Stop-loss plaatsen")
+        case .resizeStop: return T("Stop-loss bijwerken")
+        case .placeTakeProfits: return T("Take-profits plaatsen")
+        case .resizeTakeProfit: return T("Take-profit vergroten")
         }
     }
 
@@ -572,7 +572,7 @@ extension AppState {
             let st = try await execOrders([OrderRequest(asset: a, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true,
                                                         kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))])
             try throwIfRejected(st)
-            toast("Stop-loss op \(Fmt.price(px)) voor de hele positie", .success)
+            toast(T("Stop-loss op \(Fmt.price(px)) voor de hele positie"), .success)
         case .resizeStop(let oid, let size, let px):
             try await execModify(oid: oid, OrderRequest(asset: a, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true,
                                                         kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl)))
@@ -581,7 +581,7 @@ extension AppState {
                                                                  reduceOnly: true, kind: .limit(tif: "Gtc")) })
             for s in st { if case .resting(let oid) = s { orderKinds[oid] = .takeProfit } }
             try throwIfRejected(st)
-            toast("\(tps.count) take-profit\(tps.count > 1 ? "s" : "") geplaatst", .success)
+            toast(T("\(tps.count) take-profit\(tps.count > 1 ? "s" : "") geplaatst"), .success)
         case .resizeTakeProfit(let oid, let size, let px, let isTrigger):
             let isMarket = account.openOrders.first { $0.oid == oid }?.orderType.lowercased().contains("market") ?? false
             let kind: OrderKind = isTrigger ? .trigger(triggerPx: px, isMarket: isMarket, tpsl: .tp) : .limit(tif: "Gtc")

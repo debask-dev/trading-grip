@@ -7,13 +7,13 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             AccountSettingsView()
-                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+                .tabItem { Label(T("Account"), systemImage: "person.crop.circle") }
             ChartSettingsView()
-                .tabItem { Label("Chart", systemImage: "chart.bar.xaxis") }
+                .tabItem { Label(T("Chart"), systemImage: "chart.bar.xaxis") }
             RiskSettingsView()
-                .tabItem { Label("Risico", systemImage: "gauge.with.dots.needle.33percent") }
+                .tabItem { Label(T("Risico"), systemImage: "gauge.with.dots.needle.33percent") }
             AlertSettingsView()
-                .tabItem { Label("Meldingen", systemImage: "bell.badge") }
+                .tabItem { Label(T("Meldingen"), systemImage: "bell.badge") }
         }
         .frame(width: 560, height: 720)
     }
@@ -25,6 +25,12 @@ struct AccountSettingsView: View {
 
     var body: some View {
         Form {
+            Section(T("Taal")) {
+                Picker(T("Taal"), selection: $state.language) {
+                    ForEach(AppLanguage.allCases) { Text(T($0.label)).tag($0) }
+                }
+            }
+
             Section {
                 if let a = state.activeAccount {
                     HStack(spacing: 12) {
@@ -34,60 +40,60 @@ struct AccountSettingsView: View {
                             HStack(spacing: 6) {
                                 NetworkPill(network: a.network)
                                 Text(Credentials.mask(a.address)).font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.muted)
-                                Text(a.canTrade ? "· handelen" : "· alleen-lezen").font(.caption).foregroundStyle(Theme.muted)
+                                Text(a.canTrade ? T("· handelen") : T("· alleen-lezen")).font(.caption).foregroundStyle(Theme.muted)
                             }
                         }
                         Spacer()
                         StatusDot(ok: a.lastCheckOK)
                     }
                 } else {
-                    Text(state.paperMode ? "Geen account gekoppeld – je zit in de oefenmodus." : "Nog geen account gekoppeld.")
+                    Text(state.paperMode ? T("Geen account gekoppeld – je zit in de oefenmodus.") : T("Nog geen account gekoppeld."))
                         .foregroundStyle(Theme.muted)
                 }
-                Button(state.accounts.isEmpty ? "Account koppelen…" : "Accounts beheren…") { openWindow(id: "accounts") }
+                Button(state.accounts.isEmpty ? T("Account koppelen…") : T("Accounts beheren…")) { openWindow(id: "accounts") }
             } header: {
-                Text("Account")
+                Text(T("Account"))
             } footer: {
-                Text("Koppelen, testen en wisselen van account gaat in het accountscherm (⇧⌘A).")
+                Text(T("Koppelen, testen en wisselen van account gaat in het accountscherm (⇧⌘A)."))
             }
 
             if state.activeAccount == nil {
-                Section("Koersen") {
-                    Picker("Koersen van", selection: $state.network) {
-                        ForEach(HLNetwork.allCases) { Text($0.isMainnet ? "Mainnet" : "Testnet").tag($0) }
+                Section(T("Koersen")) {
+                    Picker(T("Koersen van"), selection: $state.network) {
+                        ForEach(HLNetwork.allCases) { Text($0.isMainnet ? T("Mainnet") : T("Testnet")).tag($0) }
                     }
                 }
             }
 
             Section {
-                Toggle("Oefenmodus (papier-traden)", isOn: $state.paperMode)
+                Toggle(T("Oefenmodus (papier-traden)"), isOn: $state.paperMode)
                 if state.paperMode {
-                    LabeledContent("Startsaldo") { Text(state.fmt.usd(state.paperStartingBalance)) }
+                    LabeledContent(T("Startsaldo")) { Text(state.fmt.usd(state.paperStartingBalance)) }
                     HStack {
-                        Text("Reset naar")
+                        Text(T("Reset naar"))
                         ForEach([1_000.0, 10_000.0, 100_000.0], id: \.self) { b in
                             Button("$" + Fmt.number(b, decimals: 0)) { state.resetPaper(balance: b) }
                         }
                     }
                 }
             } header: {
-                Text("Oefenmodus")
+                Text(T("Oefenmodus"))
             } footer: {
-                Text("Handel met nepgeld tegen live koersen van Hyperliquid. Orders, fills, fees, historie en portfolio worden lokaal gesimuleerd.")
+                Text(T("Handel met nepgeld tegen live koersen van Hyperliquid. Orders, fills, fees, historie en portfolio worden lokaal gesimuleerd."))
             }
 
-            Section("Trading") {
-                LabeledContent("Standaard risico per trade") {
+            Section(T("Trading")) {
+                LabeledContent(T("Standaard risico per trade")) {
                     Stepper(Fmt.number(state.riskPercent, decimals: 2) + "%", value: $state.riskPercent, in: 0.1...5, step: 0.25)
                 }
-                LabeledContent("Max slippage market-orders") {
+                LabeledContent(T("Max slippage market-orders")) {
                     Stepper(Fmt.number(state.slippagePercent, decimals: 1) + "%", value: $state.slippagePercent, in: 0.1...5, step: 0.1)
                 }
-                Picker("Margin-modus", selection: $state.useCrossMargin) {
-                    Text("Cross").tag(true)
-                    Text("Isolated").tag(false)
+                Picker(T("Margin-modus"), selection: $state.useCrossMargin) {
+                    Text(T("Cross")).tag(true)
+                    Text(T("Isolated")).tag(false)
                 }
-                Toggle("Bedragen verbergen (privacymodus)", isOn: $state.hideAmounts)
+                Toggle(T("Bedragen verbergen (privacymodus)"), isOn: $state.hideAmounts)
             }
         }
         .formStyle(.grouped)
@@ -104,24 +110,24 @@ struct AlertSettingsView: View {
                     HStack {
                         Text(e.label)
                         Spacer()
-                        Toggle("Melding", isOn: binding(e, \.notify)).toggleStyle(.checkbox)
-                        Toggle("Geluid", isOn: binding(e, \.sound)).toggleStyle(.checkbox)
+                        Toggle(T("Melding"), isOn: binding(e, \.notify)).toggleStyle(.checkbox)
+                        Toggle(T("Geluid"), isOn: binding(e, \.sound)).toggleStyle(.checkbox)
                         Button { Notifier.shared.play(e) } label: { Image(systemName: "speaker.wave.2") }
-                            .buttonStyle(.borderless).help("Geluid afspelen (\(e.sound))")
+                            .buttonStyle(.borderless).help(T("Geluid afspelen (\(e.sound))"))
                     }
                 }
             } header: {
-                Text("Meldingen en geluid")
+                Text(T("Meldingen en geluid"))
             } footer: {
-                Text("Meldingen verschijnen ook als Grip op de achtergrond staat; bij een fill springt het Dock-icoon. Werkt alleen zolang Grip draait. Toestemming voor meldingen regel je in Systeeminstellingen → Meldingen → Grip.")
+                Text(T("Meldingen verschijnen ook als Grip op de achtergrond staat; bij een fill springt het Dock-icoon. Werkt alleen zolang Grip draait. Toestemming voor meldingen regel je in Systeeminstellingen → Meldingen → Grip."))
             }
 
-            Section("Bevestigen") {
-                Toggle("Vraag bevestiging bij market orders (openen en sluiten)", isOn: $state.confirmMarketOrders)
+            Section(T("Bevestigen")) {
+                Toggle(T("Vraag bevestiging bij market orders (openen en sluiten)"), isOn: $state.confirmMarketOrders)
             }
 
-            Section("Menubalk") {
-                Toggle("Toon positie en netto resultaat in de menubalk", isOn: $state.showMenuBar)
+            Section(T("Menubalk")) {
+                Toggle(T("Toon positie en netto resultaat in de menubalk"), isOn: $state.showMenuBar)
             }
         }
         .formStyle(.grouped)
@@ -146,22 +152,22 @@ struct OnboardingView: View {
             HStack(spacing: 14) {
                 AppLogo().frame(width: 52, height: 52)
                 VStack(alignment: .leading) {
-                    Text("Welkom bij Grip").font(.system(size: 24, weight: .bold))
-                    Text("Trading op Hyperliquid, gewoon in de chart.").foregroundStyle(Theme.muted)
+                    Text(T("Welkom bij Grip")).font(.system(size: 24, weight: .bold))
+                    Text(T("Trading op Hyperliquid, gewoon in de chart.")).foregroundStyle(Theme.muted)
                 }
             }
             VStack(alignment: .leading, spacing: 12) {
-                Step(n: 1, text: "**Koppel je Hyperliquid-account**: kies Testnet of Mainnet, vul je wallet-adres in en (om te handelen) een API-wallet. Grip test alles voordat je opslaat.")
-                Step(n: 2, text: "Of probeer eerst de **oefenmodus**: nepgeld, live koersen, geen sleutels nodig.")
-                Step(n: 3, text: "Klik **Long** of **Short**, sleep entry, stop-loss en take-profit in de chart en kies je risico. Klaar.")
+                Step(n: 1, text: T("**Koppel je Hyperliquid-account**: kies Testnet of Mainnet, vul je wallet-adres in en (om te handelen) een API-wallet. Grip test alles voordat je opslaat."))
+                Step(n: 2, text: T("Of probeer eerst de **oefenmodus**: nepgeld, live koersen, geen sleutels nodig."))
+                Step(n: 3, text: T("Klik **Long** of **Short**, sleep entry, stop-loss en take-profit in de chart en kies je risico. Klaar."))
             }
-            Text("Zonder account kun je de charts, trendlijnen en de risicocalculator gewoon gebruiken.")
+            Text(T("Zonder account kun je de charts, trendlijnen en de risicocalculator gewoon gebruiken."))
                 .font(.system(size: 12)).foregroundStyle(Theme.dim)
             HStack {
-                Button("Later") { dismiss() }
-                Button("Probeer de oefenmodus") { state.paperMode = true; dismiss() }
+                Button(T("Later")) { dismiss() }
+                Button(T("Probeer de oefenmodus")) { state.paperMode = true; dismiss() }
                 Spacer()
-                Button("Account koppelen") { dismiss(); openWindow(id: "accounts") }
+                Button(T("Account koppelen")) { dismiss(); openWindow(id: "accounts") }
                     .buttonStyle(.borderedProminent)
             }
         }

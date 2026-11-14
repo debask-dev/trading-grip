@@ -51,13 +51,29 @@ public struct Fmt: Sendable {
 
     public init(hidden: Bool) { self.hidden = hidden }
 
+    /// Dutch (1.234,56) or English (1,234.56) number formatting.
+    nonisolated(unsafe) public private(set) static var englishNumbers = false
+    nonisolated(unsafe) private static var formatters: [String: NumberFormatter] = [:]
+    private static let lock = NSLock()
+
+    public static func useEnglishNumbers(_ on: Bool) {
+        lock.lock(); defer { lock.unlock() }
+        englishNumbers = on
+        formatters.removeAll()
+    }
+
+    /// Formatters are expensive to create, so they are kept per number of decimals.
     private static func nf(_ min: Int, _ max: Int) -> NumberFormatter {
+        lock.lock(); defer { lock.unlock() }
+        let key = "\(min)-\(max)"
+        if let f = formatters[key] { return f }
         let f = NumberFormatter()
-        f.locale = Locale(identifier: "nl_NL")
+        f.locale = Locale(identifier: englishNumbers ? "en_US" : "nl_NL")
         f.numberStyle = .decimal
         f.minimumFractionDigits = min
         f.maximumFractionDigits = max
         f.roundingMode = .halfUp
+        formatters[key] = f
         return f
     }
 

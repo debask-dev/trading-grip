@@ -12,10 +12,10 @@ struct IndicatorSettingsView: View {
     var body: some View {
         if let c = state.indicators.first(where: { $0.id == id }) {
             VStack(alignment: .leading, spacing: 12) {
-                Text(c.kind.title).font(.system(size: 13, weight: .semibold))
+                Text(T(c.kind.title)).font(.system(size: 13, weight: .semibold))
                 if c.kind.hasLength {
                     HStack {
-                        Text("Lengte").foregroundStyle(Theme.muted)
+                        Text(T("Lengte")).foregroundStyle(Theme.muted)
                         Spacer()
                         Stepper(value: Binding(get: { c.length }, set: { var n = c; n.length = max(1, min($0, 500)); state.updateIndicator(n) }), in: 1...500) {
                             TextField("", value: Binding(get: { c.length }, set: { var n = c; n.length = max(1, min($0, 500)); state.updateIndicator(n) }), format: .number)
@@ -32,7 +32,7 @@ struct IndicatorSettingsView: View {
                 }
                 if c.kind != .volume {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("Kleur").foregroundStyle(Theme.muted)
+                        Text(T("Kleur")).foregroundStyle(Theme.muted)
                         HStack(spacing: 6) {
                             ForEach(swatches, id: \.self) { hex in
                                 Circle().fill(Color(hex: hex)).frame(width: 16, height: 16)
@@ -41,21 +41,21 @@ struct IndicatorSettingsView: View {
                             }
                         }
                     }
-                    Picker("Dikte", selection: Binding(get: { c.width }, set: { var n = c; n.width = $0; state.updateIndicator(n) })) {
-                        ForEach([0.5, 1.0, 1.5, 2.0, 3.0], id: \.self) { Text("\(Fmt.number($0, decimals: $0 == $0.rounded() ? 0 : 1)) pt").tag($0) }
+                    Picker(T("Dikte"), selection: Binding(get: { c.width }, set: { var n = c; n.width = $0; state.updateIndicator(n) })) {
+                        ForEach([0.5, 1.0, 1.5, 2.0, 3.0], id: \.self) { Text(T("\(Fmt.number($0, decimals: $0 == $0.rounded() ? 0 : 1)) pt")).tag($0) }
                     }
                 }
                 HStack {
-                    Button(c.visible ? "Verbergen" : "Tonen") { state.toggleIndicator(id) }
+                    Button(c.visible ? T("Verbergen") : T("Tonen")) { state.toggleIndicator(id) }
                     Spacer()
-                    Button("Verwijderen", role: .destructive) { state.removeIndicator(id) }
+                    Button(T("Verwijderen"), role: .destructive) { state.removeIndicator(id) }
                 }
             }
             .font(.system(size: 12))
             .padding(14)
             .frame(width: 260)
         } else {
-            Text("Indicator verwijderd").padding(14)
+            Text(T("Indicator verwijderd")).padding(14)
         }
     }
 

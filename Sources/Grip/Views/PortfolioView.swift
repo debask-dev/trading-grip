@@ -21,10 +21,10 @@ struct PortfolioView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
-                    Text("Portfolio").font(.system(size: 20, weight: .bold))
+                    Text(T("Portfolio")).font(.system(size: 20, weight: .bold))
                     Spacer()
                     Picker("", selection: $period) {
-                        ForEach(PortfolioPeriod.allCases) { Text($0.label).tag($0) }
+                        ForEach(PortfolioPeriod.allCases) { Text(T($0.label)).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
@@ -32,39 +32,39 @@ struct PortfolioView: View {
                 }
 
                 if !state.hasAccount {
-                    EmptyState(icon: "chart.xyaxis.line", text: "Koppel je account (klik rechtsboven op ACCOUNT KOPPELEN of ⇧⌘A) om je portfolio te zien.")
+                    EmptyState(icon: "chart.xyaxis.line", text: T("Koppel je account (klik rechtsboven op ACCOUNT KOPPELEN of ⇧⌘A) om je portfolio te zien."))
                         .frame(height: 300)
                 } else {
                     HStack(spacing: 12) {
-                        StatTile(title: "Accountwaarde", value: f.usd(end))
-                        StatTile(title: "PnL \(period.label.lowercased())", value: f.signedUsd(pnlTotal), color: Theme.pnl(pnlTotal))
-                        StatTile(title: "Rendement", value: Fmt.percent(pnlPct), color: Theme.pnl(pnlPct))
-                        StatTile(title: "Open posities", value: "\(state.account.positions.count)")
+                        StatTile(title: T("Accountwaarde"), value: f.usd(end))
+                        StatTile(title: T("PnL \(period.label.lowercased())"), value: f.signedUsd(pnlTotal), color: Theme.pnl(pnlTotal))
+                        StatTile(title: T("Rendement"), value: Fmt.percent(pnlPct), color: Theme.pnl(pnlPct))
+                        StatTile(title: T("Open posities"), value: "\(state.account.positions.count)")
                     }
 
-                    ChartCard(title: "Winst / verlies (\(period.label.lowercased()))") {
+                    ChartCard(title: T("Winst / verlies (\(period.label.lowercased()))")) {
                         if pnl.isEmpty {
-                            Text("Nog geen data.").foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 220)
+                            Text(T("Nog geen data.")).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 220)
                         } else {
                             Chart(pnl) { p in
-                                AreaMark(x: .value("Tijd", p.time), y: .value("PnL", p.value))
+                                AreaMark(x: .value(T("Tijd"), p.time), y: .value(T("PnL"), p.value))
                                     .foregroundStyle(LinearGradient(colors: [Theme.pnl(pnlTotal).opacity(0.35), Theme.pnl(pnlTotal).opacity(0.02)], startPoint: .top, endPoint: .bottom))
-                                LineMark(x: .value("Tijd", p.time), y: .value("PnL", p.value))
+                                LineMark(x: .value(T("Tijd"), p.time), y: .value(T("PnL"), p.value))
                                     .foregroundStyle(Theme.pnl(pnlTotal))
                                     .lineStyle(StrokeStyle(lineWidth: 2))
-                                RuleMark(y: .value("Nul", 0)).foregroundStyle(Theme.dim.opacity(0.4))
+                                RuleMark(y: .value(T("Nul"), 0)).foregroundStyle(Theme.dim.opacity(0.4))
                             }
                             .chartYAxis(state.hideAmounts ? .hidden : .automatic)
                             .frame(height: 240)
                         }
                     }
 
-                    ChartCard(title: "Accountwaarde") {
+                    ChartCard(title: T("Accountwaarde")) {
                         if values.isEmpty {
-                            Text("Nog geen data.").foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 200)
+                            Text(T("Nog geen data.")).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 200)
                         } else {
                             Chart(values) { p in
-                                LineMark(x: .value("Tijd", p.time), y: .value("Waarde", p.value))
+                                LineMark(x: .value(T("Tijd"), p.time), y: .value(T("Waarde"), p.value))
                                     .foregroundStyle(Theme.blue)
                                     .lineStyle(StrokeStyle(lineWidth: 2))
                             }
@@ -74,25 +74,25 @@ struct PortfolioView: View {
                         }
                     }
 
-                    ChartCard(title: "Gerealiseerde winst per trade (cumulatief, na fees)") {
+                    ChartCard(title: T("Gerealiseerde winst per trade (cumulatief, na fees)")) {
                         if curve.isEmpty {
-                            Text("Nog geen afgeronde trades.").foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 200)
+                            Text(T("Nog geen afgeronde trades.")).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, minHeight: 200)
                         } else {
                             Chart(Array(curve.enumerated()), id: \.offset) { item in
-                                LineMark(x: .value("Trade", item.offset + 1), y: .value("Cumulatief", item.element.value))
+                                LineMark(x: .value(T("Trade"), item.offset + 1), y: .value(T("Cumulatief"), item.element.value))
                                     .foregroundStyle(Theme.accent)
                                     .interpolationMethod(.stepEnd)
-                                PointMark(x: .value("Trade", item.offset + 1), y: .value("Cumulatief", item.element.value))
+                                PointMark(x: .value(T("Trade"), item.offset + 1), y: .value(T("Cumulatief"), item.element.value))
                                     .foregroundStyle(Theme.accent)
                                     .symbolSize(18)
                             }
-                            .chartXAxisLabel("Trade #")
+                            .chartXAxisLabel(T("Trade #"))
                             .chartYAxis(state.hideAmounts ? .hidden : .automatic)
                             .frame(height: 200)
                         }
                     }
                     if state.hideAmounts {
-                        Label("Bedragen zijn verborgen – je kunt deze pagina veilig screenshotten.", systemImage: "eye.slash")
+                        Label(T("Bedragen zijn verborgen – je kunt deze pagina veilig screenshotten."), systemImage: "eye.slash")
                             .font(.system(size: 11.5)).foregroundStyle(Theme.muted)
                     }
                 }

@@ -40,12 +40,12 @@ struct LineToolbar: View {
                 ColorPicker("", selection: hexBinding({ line.color }, { hex in state.styleSelectedLine { $0.color = hex } }), supportsOpacity: true)
                     .labelsHidden()
                     .frame(width: 26)
-                    .help("Eigen kleur")
+                    .help(T("Eigen kleur"))
             }
             divider
             HStack(spacing: 2) {
                 ForEach([0.5, 1.0, 2.0, 3.0, 4.0], id: \.self) { w in
-                    toggleButton(active: line.width == w, help: "Dikte \(Fmt.number(w, decimals: w < 1 ? 1 : 0)) pt") {
+                    toggleButton(active: line.width == w, help: T("Dikte \(Fmt.number(w, decimals: w < 1 ? 1 : 0)) pt")) {
                         Capsule().fill(Theme.text.opacity(w < 1 ? 0.8 : 1)).frame(width: 16, height: max(w, 0.75))
                     } action: { state.styleSelectedLine { $0.width = w } }
                     .demoAnchor("lt-width-\(w)")
@@ -62,10 +62,10 @@ struct LineToolbar: View {
             }
             divider
             HStack(spacing: 2) {
-                toggleButton(active: line.extendLeft, help: "Verleng naar links") {
+                toggleButton(active: line.extendLeft, help: T("Verleng naar links")) {
                     Image(systemName: "arrow.left.to.line").font(.system(size: 11, weight: .semibold))
                 } action: { state.styleSelectedLine { $0.extendLeft.toggle() } }
-                toggleButton(active: line.extendRight, help: "Verleng naar rechts (de toekomst in)") {
+                toggleButton(active: line.extendRight, help: T("Verleng naar rechts (de toekomst in)")) {
                     Image(systemName: "arrow.right.to.line").font(.system(size: 11, weight: .semibold))
                 } action: { state.styleSelectedLine { $0.extendRight.toggle() } }
                 .demoAnchor("lt-extend-right")
@@ -75,7 +75,7 @@ struct LineToolbar: View {
                 Image(systemName: "trash").font(.system(size: 12)).frame(width: 26, height: 24)
             }
             .buttonStyle(HoverButtonStyle(active: false))
-            .help("Verwijderen (⌫)")
+            .help(T("Verwijderen (⌫)"))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -96,9 +96,9 @@ struct LineToolbar: View {
 
     private func dashName(_ d: LineDash) -> String {
         switch d {
-        case .solid: return "Doorgetrokken"
-        case .dashed: return "Gestreept"
-        case .dotted: return "Gestippeld"
+        case .solid: return T("Doorgetrokken")
+        case .dashed: return T("Gestreept")
+        case .dotted: return T("Gestippeld")
         }
     }
 }
@@ -125,75 +125,75 @@ struct ChartSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Stijl") {
-                Picker("Voorinstelling", selection: Binding(get: { state.chartStyle.presetName ?? "Eigen" }, set: { name in
+            Section(T("Stijl")) {
+                Picker(T("Voorinstelling"), selection: Binding(get: { state.chartStyle.presetName ?? T("Eigen") }, set: { name in
                     if let p = ChartStyle.presets.first(where: { $0.name == name }) { state.chartStyle = p.style }
                 })) {
                     ForEach(ChartStyle.presets, id: \.name) { Text($0.name).tag($0.name) }
-                    if state.chartStyle.presetName == nil { Text("Eigen").tag("Eigen") }
+                    if state.chartStyle.presetName == nil { Text(T("Eigen")).tag(T("Eigen")) }
                 }
                 CandlePreview(style: state.chartStyle).frame(height: 70)
             }
 
-            Section("Candles") {
-                colorRow("Stijgend", body: \.upBody, border: \.upBorder, wick: \.upWick)
-                colorRow("Dalend", body: \.downBody, border: \.downBorder, wick: \.downWick)
-                Toggle("Wicks tonen", isOn: $state.chartStyle.showWicks)
-                Toggle("Randen tonen", isOn: $state.chartStyle.showBorders)
-                Toggle("Stijgende candles hol", isOn: $state.chartStyle.hollowUp)
+            Section(T("Candles")) {
+                colorRow(T("Stijgend"), body: \.upBody, border: \.upBorder, wick: \.upWick)
+                colorRow(T("Dalend"), body: \.downBody, border: \.downBorder, wick: \.downWick)
+                Toggle(T("Wicks tonen"), isOn: $state.chartStyle.showWicks)
+                Toggle(T("Randen tonen"), isOn: $state.chartStyle.showBorders)
+                Toggle(T("Stijgende candles hol"), isOn: $state.chartStyle.hollowUp)
             }
 
-            Section("Chart") {
-                Toggle("Rasterlijnen", isOn: $state.chartStyle.showGrid)
-                Toggle("Volume", isOn: Binding(
+            Section(T("Chart")) {
+                Toggle(T("Rasterlijnen"), isOn: $state.chartStyle.showGrid)
+                Toggle(T("Volume"), isOn: Binding(
                     get: { state.indicators.contains { $0.kind == .volume && $0.visible } },
                     set: { on in
                         if let i = state.indicators.firstIndex(where: { $0.kind == .volume }) { state.indicators[i].visible = on }
                         else if on { state.addIndicator(.volume) }
                     }))
-                Picker("Koop/verkoop-markeringen", selection: $state.markerDays) {
-                    Text("Uit").tag(0)
-                    Text("Alleen huidige trade").tag(-1)
-                    Text("Laatste 7 dagen").tag(7)
-                    Text("Laatste 30 dagen").tag(30)
-                    Text("Alles").tag(3650)
+                Picker(T("Koop/verkoop-markeringen"), selection: $state.markerDays) {
+                    Text(T("Uit")).tag(0)
+                    Text(T("Alleen huidige trade")).tag(-1)
+                    Text(T("Laatste 7 dagen")).tag(7)
+                    Text(T("Laatste 30 dagen")).tag(30)
+                    Text(T("Alles")).tag(3650)
                 }
             }
 
-            Section("Screenshots (⇧⌘S)") {
-                LabeledContent("Map") {
+            Section(T("Screenshots (⇧⌘S)")) {
+                LabeledContent(T("Map")) {
                     HStack {
                         Text((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)
                             .lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-                        Button("Kies…") { state.chooseScreenshotFolder() }
-                        Button("Open") { state.revealScreenshotFolder() }
+                        Button(T("Kies…")) { state.chooseScreenshotFolder() }
+                        Button(T("Open")) { state.revealScreenshotFolder() }
                     }
                 }
-                Toggle("Ook naar het klembord kopiëren", isOn: $state.screenshotToClipboard)
+                Toggle(T("Ook naar het klembord kopiëren"), isOn: $state.screenshotToClipboard)
             }
 
             Section {
-                LabeledContent("Kleur") {
+                LabeledContent(T("Kleur")) {
                     ColorPicker("", selection: hexBinding({ state.lineAppearance.color }, { state.lineAppearance.color = $0 }), supportsOpacity: true).labelsHidden()
                 }
-                Picker("Dikte", selection: $state.lineAppearance.width) {
-                    ForEach([0.5, 1.0, 2.0, 3.0, 4.0], id: \.self) { Text("\(Fmt.number($0, decimals: $0 < 1 ? 1 : 0)) pt").tag($0) }
+                Picker(T("Dikte"), selection: $state.lineAppearance.width) {
+                    ForEach([0.5, 1.0, 2.0, 3.0, 4.0], id: \.self) { Text(T("\(Fmt.number($0, decimals: $0 < 1 ? 1 : 0)) pt")).tag($0) }
                 }
-                Picker("Stijl", selection: $state.lineAppearance.dash) {
-                    Text("Doorgetrokken").tag(LineDash.solid)
-                    Text("Gestreept").tag(LineDash.dashed)
-                    Text("Gestippeld").tag(LineDash.dotted)
+                Picker(T("Stijl"), selection: $state.lineAppearance.dash) {
+                    Text(T("Doorgetrokken")).tag(LineDash.solid)
+                    Text(T("Gestreept")).tag(LineDash.dashed)
+                    Text(T("Gestippeld")).tag(LineDash.dotted)
                 }
-                Toggle("Nieuwe lijnen naar rechts verlengen (de toekomst in)", isOn: $state.lineAppearance.extendRight)
-                Toggle("Magneet: altijd snappen op open/high/low/close", isOn: $state.magnet)
+                Toggle(T("Nieuwe lijnen naar rechts verlengen (de toekomst in)"), isOn: $state.lineAppearance.extendRight)
+                Toggle(T("Magneet: altijd snappen op open/high/low/close"), isOn: $state.magnet)
             } header: {
-                Text("Trendlijnen")
+                Text(T("Trendlijnen"))
             } footer: {
-                Text("Met ⌘ ingedrukt zet je de magneet tijdelijk om. Klik een lijn aan voor de werkbalk met kleur, dikte, stijl en verlengen.")
+                Text(T("Met ⌘ ingedrukt zet je de magneet tijdelijk om. Klik een lijn aan voor de werkbalk met kleur, dikte, stijl en verlengen."))
             }
 
             Section {
-                Button("Standaardstijl herstellen") {
+                Button(T("Standaardstijl herstellen")) {
                     state.chartStyle = .grip
                     state.lineAppearance = LineAppearance()
                 }
@@ -207,13 +207,13 @@ struct ChartSettingsView: View {
         return VStack(alignment: .leading, spacing: 8) {
             LabeledContent(title) {
                 HStack(spacing: 14) {
-                    picker("Body", body)
-                    picker("Rand", border)
-                    picker("Wick", wick)
+                    picker(T("Body"), body)
+                    picker(T("Rand"), border)
+                    picker(T("Wick"), wick)
                 }
             }
             HStack(spacing: 6) {
-                Text("Snel:").font(.caption).foregroundStyle(Theme.muted)
+                Text(T("Snel:")).font(.caption).foregroundStyle(Theme.muted)
                 ForEach(ChartStyle.swatches, id: \.self) { hex in
                     Button { state.chartStyle.setColor(hex, up: up) } label: {
                         RoundedRectangle(cornerRadius: 4).fill(Color(hex: hex)).frame(width: 18, height: 18)

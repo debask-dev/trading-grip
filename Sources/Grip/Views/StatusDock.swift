@@ -13,10 +13,10 @@ struct StatusDock: View {
             if state.dockExpanded {
                 VStack(spacing: 0) {
                     HStack(spacing: 4) {
-                        dockTab("Posities \(state.account.positions.count)", 0)
-                        dockTab("Orders \(state.account.openOrders.count)", 1)
+                        dockTab(T("Posities \(state.account.positions.count)"), 0)
+                        dockTab(T("Orders \(state.account.openOrders.count)"), 1)
                         Spacer()
-                        Text(state.dockTab == 1 ? "gesorteerd op afstand tot de koers" : "klik een regel om naar die markt te gaan")
+                        Text(state.dockTab == 1 ? T("gesorteerd op afstand tot de koers") : T("klik een regel om naar die markt te gaan"))
                             .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
                     }
                     .padding(.horizontal, 10).padding(.vertical, 5)
@@ -24,10 +24,10 @@ struct StatusDock: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             if state.dockTab == 0 {
-                                if state.account.positions.isEmpty { empty("Geen open posities") }
+                                if state.account.positions.isEmpty { empty(T("Geen open posities")) }
                                 ForEach(state.account.positions) { PositionRow(pos: $0) }
                             } else {
-                                if state.account.openOrders.isEmpty { empty("Geen open orders") }
+                                if state.account.openOrders.isEmpty { empty(T("Geen open orders")) }
                                 ForEach(state.ordersByDistance) { OrderRow(order: $0) }
                             }
                         }
@@ -72,9 +72,9 @@ struct StatusStrip: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            label("POSITIES")
+            label(T("POSITIES"))
             if state.account.positions.isEmpty {
-                Text("geen").foregroundStyle(Theme.dim)
+                Text(T("geen")).foregroundStyle(Theme.dim)
             }
             ForEach(state.account.positions) { p in
                 let net = state.net(for: p)
@@ -83,19 +83,19 @@ struct StatusStrip: View {
                         Text("\(p.isLong ? "▲" : "▼") \(p.coin)").fontWeight(.semibold).foregroundStyle(p.isLong ? Theme.green : Theme.red)
                         Text(state.fmt.signedUsd(net)).mono(11).foregroundStyle(Theme.pnl(net))
                         if state.stopOrder(p.coin) == nil {
-                            Text("geen stop").font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.orange)
+                            Text(T("geen stop")).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.orange)
                         }
                     }
                 }
                 .buttonStyle(.plain)
-                .help("Naar \(p.coin)")
+                .help(T("Naar \(p.coin)"))
             }
             Divider().frame(height: 14)
-            label("ORDERS")
-            Text("\(state.account.openOrders.count) open").foregroundStyle(state.account.openOrders.isEmpty ? Theme.dim : Theme.text)
+            label(T("ORDERS"))
+            Text(T("\(state.account.openOrders.count) open")).foregroundStyle(state.account.openOrders.isEmpty ? Theme.dim : Theme.text)
             if let o = state.ordersByDistance.first, let d = state.distance(o) {
                 Button { state.coin = o.coin } label: {
-                    Text("· \(o.coin) \(state.orderName(o).lowercased()) op \(Fmt.number(d * 100, decimals: d < 0.01 ? 2 : 1))%")
+                    Text(T("· \(o.coin) \(state.orderName(o).lowercased()) op \(Fmt.number(d * 100, decimals: d < 0.01 ? 2 : 1))%"))
                         .foregroundStyle(d < 0.005 ? Theme.orange : Theme.muted)
                 }
                 .buttonStyle(.plain)
@@ -107,12 +107,12 @@ struct StatusStrip: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: state.dockExpanded ? "chevron.down" : "chevron.up").font(.system(size: 9, weight: .bold))
-                    Text("⌘J").font(.system(size: 10)).foregroundStyle(Theme.dim)
+                    Text(T("⌘J")).font(.system(size: 10)).foregroundStyle(Theme.dim)
                 }
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.muted)
-            .help(state.dockExpanded ? "Overzicht inklappen (⌘J)" : "Overzicht van alle posities en orders (⌘J)")
+            .help(state.dockExpanded ? T("Overzicht inklappen (⌘J)") : T("Overzicht van alle posities en orders (⌘J)"))
         }
         .font(.system(size: 11.5))
         .lineLimit(1)
@@ -145,7 +145,7 @@ struct PositionRow: View {
             HStack(spacing: 6) {
                 SidePill(isLong: pos.isLong)
                 Text(pos.coin).fontWeight(.semibold)
-                Text("\(pos.leverage)×").foregroundStyle(Theme.dim)
+                Text(T("\(pos.leverage)×")).foregroundStyle(Theme.dim)
             }
             .frame(width: 130, alignment: .leading)
             Text(state.fmt.size(pos.size, coin: "", decimals: 4)).mono(11.5).frame(width: 80, alignment: .trailing)
@@ -154,8 +154,8 @@ struct PositionRow: View {
             Group {
                 if sl == nil {
                     HStack(spacing: 6) {
-                        Text("⚠ geen stop").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.orange)
-                        Button("+ Stop") { state.goToPosition(pos.coin) }.buttonStyle(MiniButtonStyle())
+                        Text(T("⚠ geen stop")).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.orange)
+                        Button(T("+ Stop")) { state.goToPosition(pos.coin) }.buttonStyle(MiniButtonStyle())
                     }
                 } else {
                     TradeProgressBar(isLong: pos.isLong, stop: sl?.displayPx, breakEven: be, target: tp, price: px)
@@ -165,12 +165,12 @@ struct PositionRow: View {
             Text(pos.liquidationPx.map { Fmt.price($0) } ?? "–").mono(11).foregroundStyle(Theme.dim).frame(width: 70, alignment: .trailing)
             Spacer(minLength: 4)
             HStack(spacing: 4) {
-                Button("½") { state.requestClose(fraction: 0.5, coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help("Helft sluiten (market)")
-                Button("Sluit") { state.requestClose(fraction: 1, coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help("Hele positie sluiten (market)")
-                Button("⇅") { state.requestReverse(coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help("Omkeren: long ↔ short, zelfde grootte")
+                Button("½") { state.requestClose(fraction: 0.5, coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help(T("Helft sluiten (market)"))
+                Button(T("Sluit")) { state.requestClose(fraction: 1, coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help(T("Hele positie sluiten (market)"))
+                Button("⇅") { state.requestReverse(coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help(T("Omkeren: long ↔ short, zelfde grootte"))
                 if let sl, let be, pos.isLong ? be > sl.displayPx : be < sl.displayPx {
-                    Button("BE") { Task { await state.moveStopToBreakEven(coin: pos.coin, force: true) } }
-                        .buttonStyle(MiniButtonStyle()).help("Stop naar break-even (\(Fmt.price(be)))")
+                    Button(T("BE")) { Task { await state.moveStopToBreakEven(coin: pos.coin, force: true) } }
+                        .buttonStyle(MiniButtonStyle()).help(T("Stop naar break-even (\(Fmt.price(be)))"))
                 }
             }
             .disabled(state.busy)
@@ -210,12 +210,12 @@ struct TradeProgressBar: View {
                 Capsule().fill(Theme.green.opacity(0.45)).frame(width: max(w - beX, 0), height: 3).offset(x: beX, y: 3)
                 Rectangle().fill(Theme.muted).frame(width: 1.5, height: 10).offset(x: beX - 0.75, y: 3)
                 Circle().fill(Theme.text).frame(width: 9, height: 9).overlay(Circle().stroke(Theme.bg, lineWidth: 2)).offset(x: f(price) * w - 4.5, y: 3)
-                Text("SL").font(.system(size: 8)).foregroundStyle(Theme.dim).offset(y: -7)
+                Text(T("SL")).font(.system(size: 8)).foregroundStyle(Theme.dim).offset(y: -7)
                 Text(target == nil ? "–" : "TP").font(.system(size: 8)).foregroundStyle(Theme.dim).offset(x: w - 10, y: -7)
             }
         }
         .frame(height: 20)
-        .help("Koers tussen je stop (links) en je doel (rechts); het streepje is break-even")
+        .help(T("Koers tussen je stop (links) en je doel (rechts); het streepje is break-even"))
     }
 }
 
@@ -231,7 +231,7 @@ struct OrderRow: View {
         let d = state.distance(o)
         HStack(spacing: 10) {
             Text(o.coin).fontWeight(.semibold).frame(width: 60, alignment: .leading)
-            Text(state.orderName(o) + (o.isTrigger || o.reduceOnly ? "" : (o.isBuy ? " long" : " short")))
+            Text(state.orderName(o) + (o.isTrigger || o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
                 .foregroundStyle(color(o)).frame(width: 130, alignment: .leading)
             Group {
                 if editing {
@@ -258,18 +258,18 @@ struct OrderRow: View {
                 Text(d.map { Fmt.number($0 * 100, decimals: $0 < 0.01 ? 2 : 1) + "%" } ?? "–").mono(11).foregroundStyle(near ? Theme.orange : Theme.muted)
             }
             .frame(width: 130, alignment: .leading)
-            Text(o.size > 0 ? state.fmt.size(o.size, coin: "", decimals: 4) : "hele positie").mono(11).frame(width: 90, alignment: .trailing)
+            Text(o.size > 0 ? state.fmt.size(o.size, coin: "", decimals: 4) : T("hele positie")).mono(11).frame(width: 90, alignment: .trailing)
             Text(age(o.timestamp)).foregroundStyle(Theme.dim).frame(width: 80, alignment: .trailing)
             Spacer(minLength: 4)
             HStack(spacing: 4) {
                 if editing {
-                    Button("Opslaan") { save() }.buttonStyle(MiniButtonStyle())
+                    Button(T("Opslaan")) { save() }.buttonStyle(MiniButtonStyle())
                 } else {
-                    Button("Wijzig") { text = Fmt.price(o.displayPx).replacingOccurrences(of: ".", with: ""); editing = true }
-                        .buttonStyle(MiniButtonStyle()).help("Prijs aanpassen (of sleep de lijn in de chart)")
+                    Button(T("Wijzig")) { text = Fmt.price(o.displayPx).replacingOccurrences(of: L10n.isEnglish ? "," : ".", with: ""); editing = true }
+                        .buttonStyle(MiniButtonStyle()).help(T("Prijs aanpassen (of sleep de lijn in de chart)"))
                 }
-                Button("↗") { state.coin = o.coin; state.tab = .trade }.buttonStyle(MiniButtonStyle()).help("Naar de chart van \(o.coin)")
-                Button("✕") { Task { await state.cancelOrder(o.oid) } }.buttonStyle(MiniButtonStyle(color: Theme.red)).help("Annuleren")
+                Button("↗") { state.coin = o.coin; state.tab = .trade }.buttonStyle(MiniButtonStyle()).help(T("Naar de chart van \(o.coin)"))
+                Button("✕") { Task { await state.cancelOrder(o.oid) } }.buttonStyle(MiniButtonStyle(color: Theme.red)).help(T("Annuleren"))
             }
         }
         .font(.system(size: 12))
@@ -279,7 +279,7 @@ struct OrderRow: View {
         .onHover { hovering = $0 }
         .onTapGesture { state.coin = o.coin }
         .contextMenu {
-            Button("Alle orders in \(o.coin) annuleren", role: .destructive) {
+            Button(T("Alle orders in \(o.coin) annuleren"), role: .destructive) {
                 Task { for x in state.account.orders(for: o.coin) { await state.cancelOrder(x.oid) } }
             }
         }
@@ -289,8 +289,9 @@ struct OrderRow: View {
     private func save() {
         editing = false
         var t = text.filter { "0123456789.,".contains($0) }
-        if t.range(of: #"^\d{1,3}(\.\d{3})+(,\d+)?$"#, options: .regularExpression) != nil { t = t.replacingOccurrences(of: ".", with: "") }
-        t = t.replacingOccurrences(of: ",", with: ".")
+        if L10n.isEnglish { t = t.replacingOccurrences(of: ",", with: "") }
+        else if t.range(of: #"^\d{1,3}(\.\d{3})+(,\d+)?$"#, options: .regularExpression) != nil { t = t.replacingOccurrences(of: ".", with: "") }
+        if !L10n.isEnglish { t = t.replacingOccurrences(of: ",", with: ".") }
         guard let px = Double(t), px > 0 else { return }
         state.pendingOrderPrices[order.oid] = px
         Task { await state.moveOrder(oid: order.oid, to: px) }
@@ -303,10 +304,10 @@ struct OrderRow: View {
 
     private func age(_ ms: Int64) -> String {
         let s = Date().timeIntervalSince1970 - Double(ms) / 1000
-        if s < 3600 { return "\(max(1, Int(s / 60))) min" }
-        if s < 86_400 { return "\(Int(s / 3600)) u" }
-        if s < 172_800 { return "gisteren" }
-        return "\(Int(s / 86_400)) dagen"
+        if s < 3600 { return T("\(max(1, Int(s / 60))) min") }
+        if s < 86_400 { return T("\(Int(s / 3600)) u") }
+        if s < 172_800 { return T("gisteren") }
+        return T("\(Int(s / 86_400)) dagen")
     }
 }
 
@@ -366,11 +367,11 @@ struct MarketTab: View {
                     Circle().fill(near ? Theme.orange : Theme.blue).frame(width: 6, height: 6)
                     Text("\(orders)").font(.system(size: 10)).foregroundStyle(Theme.muted)
                 }
-                .help(near ? "Een order ligt dichtbij de koers" : "\(orders) open order\(orders == 1 ? "" : "s")")
+                .help(near ? T("Een order ligt dichtbij de koers") : T("\(orders) open order\(orders == 1 ? "" : "s")"))
             }
             if hovering && !state.isPinned(market) && state.marketTabs.count > 1 {
                 Button { state.closeTab(market) } label: { Image(systemName: "xmark").font(.system(size: 8, weight: .bold)) }
-                    .buttonStyle(.plain).foregroundStyle(Theme.muted).help("Tab sluiten")
+                    .buttonStyle(.plain).foregroundStyle(Theme.muted).help(T("Tab sluiten"))
             }
         }
         .padding(.horizontal, 9).padding(.vertical, 4)

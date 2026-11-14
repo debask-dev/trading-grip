@@ -414,6 +414,7 @@ final class ChartCanvas: NSView {
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        timeFormatter.locale = Locale(identifier: L10n.isEnglish ? "en_US" : "nl_NL")
         computeRange()
         easeRange()
         labelRects = [:]
@@ -443,7 +444,7 @@ final class ChartCanvas: NSView {
         overlay.needsDisplay = true
 
         if candles.isEmpty {
-            text(isLoading ? "Koersen laden…" : "Geen koersdata", at: CGPoint(x: plot.midX, y: plot.midY), font: .systemFont(ofSize: 14), color: Palette.dim, align: .center)
+            text(isLoading ? T("Koersen laden…") : T("Geen koersdata"), at: CGPoint(x: plot.midX, y: plot.midY), font: .systemFont(ofSize: 14), color: Palette.dim, align: .center)
         }
     }
 
@@ -645,8 +646,8 @@ final class ChartCanvas: NSView {
         // Label box under (or above, when measuring down) the rectangle
         let sign = up ? "+" : "−"
         let line1 = "\(sign)\(Fmt.price(abs(r.priceChange)))  (\(Fmt.percent(r.percent)))"
-        let line2 = "\(abs(r.bars)) candles · \(ChartMath.durationText(ms: r.durationMs))"
-        let line3 = r.volume > 0 ? "Vol \(compact(r.volume))" : ""
+        let line2 = T("\(abs(r.bars)) candles · \(ChartMath.durationText(ms: r.durationMs))")
+        let line3 = r.volume > 0 ? T("Vol \(compact(r.volume))") : ""
         let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
         let attrs: [NSAttributedString.Key: Any] = [.font: font]
         let w = [line1, line2, line3].map { ($0 as NSString).size(withAttributes: attrs).width }.max()! + 20
@@ -815,7 +816,7 @@ final class ChartCanvas: NSView {
         }
         put(Fmt.percent(change), num, valueColor, gap: 12)
         if c.volume > 0 {
-            put("Vol", key, Palette.muted, gap: 3)
+            put(T("Vol"), key, Palette.muted, gap: 3)
             put("\(compact(c.volume)) \(coin)", num, Palette.text, gap: 6)
             put("$" + compact(c.volume * (c.high + c.low + c.close) / 3), num, Palette.muted, gap: 0)
         }
@@ -1447,16 +1448,16 @@ final class ChartCanvas: NSView {
         case .trendline(let id)?, .endpoint(let id, _)?:
             guard let l = trendlines.first(where: { $0.id == id }) else { return nil }
             onTrendlineSelect?(id)
-            let right = ClosureMenuItem(title: "Verleng naar rechts") { [weak self] in var n = l; n.extendRight.toggle(); self?.onTrendlineUpdate?(n) }
+            let right = ClosureMenuItem(title: T("Verleng naar rechts")) { [weak self] in var n = l; n.extendRight.toggle(); self?.onTrendlineUpdate?(n) }
             right.state = l.extendRight ? .on : .off
             menu.addItem(right)
-            let left = ClosureMenuItem(title: "Verleng naar links") { [weak self] in var n = l; n.extendLeft.toggle(); self?.onTrendlineUpdate?(n) }
+            let left = ClosureMenuItem(title: T("Verleng naar links")) { [weak self] in var n = l; n.extendLeft.toggle(); self?.onTrendlineUpdate?(n) }
             left.state = l.extendLeft ? .on : .off
             menu.addItem(left)
             menu.addItem(.separator())
-            menu.addItem(ClosureMenuItem(title: "Verwijderen") { [weak self] in self?.onTrendlineDelete?(id) })
+            menu.addItem(ClosureMenuItem(title: T("Verwijderen")) { [weak self] in self?.onTrendlineDelete?(id) })
         case .line(.order(let oid))?:
-            menu.addItem(ClosureMenuItem(title: "Annuleer order") { [weak self] in self?.onCancelOrder?(oid) })
+            menu.addItem(ClosureMenuItem(title: T("Annuleer order")) { [weak self] in self?.onCancelOrder?(oid) })
         default:
             guard plot.contains(p) || (p.x > plot.maxX && p.y >= plot.minY && p.y <= plot.maxY),
                   let items = priceMenuItems?(price(y: p.y)), !items.isEmpty else { return nil }
@@ -1633,7 +1634,7 @@ extension ChartCanvas {
         var cx = startX
         var cy = yy
         if legendCollapsed {
-            let s = "ƒx \(indicators.count) ›"
+            let s = T("ƒx \(indicators.count) ›")
             let r = NSRect(x: cx - 6, y: cy - 9, width: width(s, font) + 12, height: 18)
             Palette.card.withAlphaComponent(0.85).setFill()
             NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
@@ -1801,7 +1802,7 @@ extension ChartCanvas {
     var demoVisibleBars: Int { max(10, Int(Double(plot.width) / vp.barSpacing - vp.rightOffset) - 2) }
 
     var demoDebug: String {
-        "tool=\(tool) drag=\(drag) mouse=\(String(describing: mouse)) plot=\(plot) lines=\(trendlines.count) pending=\(pendingTrendStart != nil) draft=\(trendDraft != nil)"
+        ("tool=\(tool) drag=\(drag) mouse=\(String(describing: mouse)) plot=\(plot) lines=\(trendlines.count) pending=\(pendingTrendStart != nil) draft=\(trendDraft != nil)")
     }
 
     /// Converts a window point to the chart's (time, price), optionally snapped like ⌘-drawing does.
