@@ -100,15 +100,15 @@ struct GripCommands: Commands {
             Button("Order annuleren (ticket)") { state.ticket = nil }
                 .disabled(state.ticket == nil)
             Divider()
-            Button("Snel: market long") { state.quickTrade(long: true) }
+            Button("Market long (Bedrag)") { state.quickTrade(long: true) }
                 .keyboardShortcut("b", modifiers: .option)
-            Button("Snel: market short") { state.quickTrade(long: false) }
+            Button("Market short (Bedrag)") { state.quickTrade(long: false) }
                 .keyboardShortcut("n", modifiers: .option)
             Button("Positie sluiten") { state.quickClose() }
                 .keyboardShortcut("x", modifiers: .option)
                 .disabled(state.position == nil)
             Divider()
-            Picker("Handelspaneel", selection: $state.panelMode) {
+            Picker("Tabblad", selection: $state.panelMode) {
                 ForEach(PanelMode.allCases) { Text($0.label).tag($0) }
             }
             Divider()

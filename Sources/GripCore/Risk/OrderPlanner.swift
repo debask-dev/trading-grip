@@ -32,6 +32,9 @@ public struct PlanInput: Equatable, Sendable {
     public var existing: ExistingPosition?
     /// Margin that is free right now (withdrawable). The new part must fit in it.
     public var availableMargin: Double?
+    /// Cross margin: the whole account is the buffer, so the liquidation price depends on the account value,
+    /// not on the leverage. Isolated: only the position's margin.
+    public var isCross = false
 
     public init(accountValue: Double, riskPercent: Double?, isLong: Bool, entries: [TPTarget], stopLoss: Double?,
                 maxLeverage: Int, szDecimals: Int) {
@@ -86,6 +89,14 @@ public enum OrderPlanner {
         let maintenance = 1.0 / Double(max(maxLeverage, 1)) / 2
         let l = Double(max(leverage, 1))
         return isLong ? entry * (1 - 1 / l + maintenance) : entry * (1 + 1 / l - maintenance)
+    }
+
+    /// Cross margin: price where account value + loss on this position = maintenance margin (other positions ignored).
+    static func crossLiquidation(entry: Double, size: Double, isLong: Bool, accountValue: Double, maxLeverage: Int) -> Double {
+        guard size > 0 else { return 0 }
+        let mmr = 1.0 / Double(max(maxLeverage, 1)) / 2
+        let px = isLong ? (size * entry - accountValue) / (size * (1 - mmr)) : (accountValue + size * entry) / (size * (1 + mmr))
+        return max(px, 0)
     }
 
     static func breakEven(entry: Double, isLong: Bool, entryFee: Double, exitFee: Double) -> Double {
@@ -204,8 +215,15 @@ public enum OrderPlanner {
             return es * (dir * (first.price - s) + i.entryFeeRate * first.price + i.takerFeeRate * s) + (existingLoss ?? 0)
         }()
 
-        let liqAfter = afterSize > 0 ? liquidation(entry: afterEntry, isLong: posLong, leverage: lev, maxLeverage: i.maxLeverage) : 0
-        if let s = stop, afterSize > 0, (i.isLong && liqAfter >= s) || (!i.isLong && liqAfter <= s) {
+        let liqAfter: Double
+        if afterSize <= 0 {
+            liqAfter = 0
+        } else if i.isCross {
+            liqAfter = crossLiquidation(entry: afterEntry, size: afterSize, isLong: posLong, accountValue: i.accountValue, maxLeverage: i.maxLeverage)
+        } else {
+            liqAfter = liquidation(entry: afterEntry, isLong: posLong, leverage: lev, maxLeverage: i.maxLeverage)
+        }
+        if let s = stop, afterSize > 0, liqAfter > 0, (i.isLong && liqAfter >= s) || (!i.isLong && liqAfter <= s) {
             warnings.append("Let op: de geschatte liquidatieprijs ligt vóór je stop-loss.")
         }
 

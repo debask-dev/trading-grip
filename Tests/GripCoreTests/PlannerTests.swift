@@ -68,4 +68,22 @@ final class PlannerTests: XCTestCase {
         XCTAssertEqual(p.reducePnl ?? 0, 100, accuracy: 0.01)
         XCTAssertEqual(p.after.size, 0, accuracy: 1e-12)
     }
+
+    func testCrossLiquidationUsesAccountValue() throws {
+        // $10k account, 0.2 BTC long at 65k ($13k): cross liquidation far below; leverage does not move it.
+        var i = input([TPTarget(price: 65_000, fraction: 1)], stop: nil, risk: nil)
+        i.sizeOverride = 0.2
+        i.isCross = true
+        i.leverageOverride = 3
+        let a = try XCTUnwrap(OrderPlanner.plan(i))
+        i.leverageOverride = 20
+        let b = try XCTUnwrap(OrderPlanner.plan(i))
+        XCTAssertEqual(a.estLiquidationPx, b.estLiquidationPx, accuracy: 0.01)
+        // 0.2 × (65000 − liq) ≈ 10000 − maintenance → liq ≈ 15.2k
+        XCTAssertEqual(a.estLiquidationPx, (0.2 * 65_000 - 10_000) / (0.2 * (1 - 1.0 / 80)), accuracy: 0.01)
+        // Isolated at 20× is much closer.
+        i.isCross = false
+        let c = try XCTUnwrap(OrderPlanner.plan(i))
+        XCTAssertGreaterThan(c.estLiquidationPx, 60_000)
+    }
 }

@@ -23,28 +23,66 @@ extension AppState {
     /// Calculation for the current ticket (cached: it is asked for by every chart label on every redraw).
     var plan: Plan? {
         guard let t = ticket else { return nil }
-        let key = PlanKey(ticket: t, riskSizing: panelMode != .manual, riskPercent: riskPercent, price: t.isMarket ? price : 0,
+        let key = PlanKey(ticket: t, riskSizing: t.riskSized, riskPercent: riskPercent, price: price,
                           equity: sizingEquity, free: account.withdrawable, position: position, tpOrders: existingTPOrders.map { "\($0.oid)-\($0.size)" },
                           fees: [feeRates.taker, feeRates.maker], coin: coin)
         if key == planCacheKey { return planCache }
         planCacheKey = key
-        planCache = plan(for: t, riskSizing: key.riskSizing)
+        planCache = plan(for: t, riskSizing: t.riskSized)
         return planCache
+    }
+
+    /// Size-weighted entry of the ticket (market entry at the current price).
+    func averageEntry(_ t: Ticket) -> Double {
+        let total = t.entries.reduce(0) { $0 + max($1.pct, 0) }
+        guard total > 0 else { return t.isMarket ? price : t.entry }
+        return t.entries.enumerated().reduce(0) { acc, e in
+            acc + (t.isMarket && e.offset == 0 ? price : e.element.price) * max(e.element.pct, 0) / total
+        }
+    }
+
+    /// Leverage used for the ticket: chosen, else the position's, else the Bedrag default.
+    func ticketLeverage(_ t: Ticket) -> Int { t.leverage ?? position?.leverage ?? amountLev }
+
+    /// Size in coins from what was typed (Bedrag tab, adding, reducing).
+    func derivedSize(_ t: Ticket) -> Double {
+        let avg = averageEntry(t)
+        guard avg > 0 else { return 0 }
+        var size: Double
+        switch t.amountUnit {
+        case .margin: size = t.amount * Double(ticketLeverage(t)) / avg
+        case .notional: size = t.amount / avg
+        case .coin: size = t.amount
+        }
+        if t.reduceOnly, let pos = position { size = min(size, abs(pos.size)) }
+        return max(size, 0)
+    }
+
+    /// Converts a size in coins to the ticket's unit (for switching units without changing the size).
+    func amount(forSize size: Double, unit: AmountUnit, _ t: Ticket) -> Double {
+        let avg = averageEntry(t)
+        switch unit {
+        case .margin: return size * avg / Double(max(ticketLeverage(t), 1))
+        case .notional: return size * avg
+        case .coin: return size
+        }
     }
 
     func plan(for t: Ticket, riskSizing: Bool) -> Plan? {
         guard let a = asset else { return nil }
         var entries = t.entries.map { TPTarget(price: $0.price, fraction: max($0.pct, 0) / 100) }
         if t.isMarket, !entries.isEmpty { entries[0].price = price }
-        var input = PlanInput(accountValue: sizingEquity, riskPercent: riskSizing ? riskPercent : nil, isLong: t.isLong,
+        let sizedByRisk = riskSizing && !t.reduceOnly
+        var input = PlanInput(accountValue: sizingEquity, riskPercent: sizedByRisk ? riskPercent : nil, isLong: t.isLong,
                               entries: entries, stopLoss: t.useStopLoss && !t.reduceOnly ? t.stopLoss : nil,
                               maxLeverage: a.maxLeverage, szDecimals: a.szDecimals)
         input.takerFeeRate = feeRates.taker
         input.entryFeeRate = t.isMarket && t.entries.count == 1 ? feeRates.taker : feeRates.maker
         input.takeProfits = ticketTPTargets(t)
-        if !riskSizing || t.lock == .size { input.sizeOverride = t.size ?? 0 }
+        if !sizedByRisk { input.sizeOverride = derivedSize(t) }
         input.leverageOverride = t.leverage
         input.availableMargin = isExampleEquity ? nil : account.withdrawable
+        input.isCross = position?.isCross ?? (useCrossMargin && !a.onlyIsolated)
         if let pos = position {
             input.existing = ExistingPosition(size: pos.size, entryPx: pos.entryPx, isLong: pos.isLong, leverage: pos.leverage)
         }
@@ -67,40 +105,44 @@ extension AppState {
 
     // MARK: New ticket
 
-    /// New order. Lines start inside what is visible on the chart. With an open position in the same direction
-    /// this adds to it; in the other direction it reduces it (manual panel) or asks first.
+    /// New order. Lines start inside what is visible on the chart. Risico: sized by your max loss.
+    /// Bedrag / Positie: sized by the amount you type. With an open position in the same direction this adds to it;
+    /// in the other direction it reduces it (Positie tab) or asks first.
     func newTicket(long: Bool, entry atPrice: Double? = nil) {
         let p = price
         guard p > 0 else { return }
-        if panelMode == .quick { panelMode = .risk }
-        if let pos = position, pos.isLong != long, panelMode != .manual {
+        let pos = position
+        if let pos, pos.isLong != long, panelMode != .position {
             let side = pos.isLong ? "long" : "short"
             pendingConfirm = ConfirmRequest(
                 title: "Je zit \(side) in \(coin)",
-                message: "Hyperliquid heeft één positie per munt. Een \(long ? "long" : "short")-order opent geen aparte trade, maar maakt je \(side) kleiner.\nVerkleinen kan in het paneel Handmatig. Sluiten kan ook direct met de knoppen bij je positie.",
-                confirmTitle: "Verkleinen in Handmatig", destructive: false) { [weak self] in
-                    self?.panelMode = .manual
-                    self?.newTicket(long: long, entry: atPrice)
+                message: "Hyperliquid heeft één positie per munt. Een \(long ? "long" : "short")-order opent geen aparte trade, maar maakt je \(side) kleiner.\nVerkleinen of sluiten doe je in het tabblad Positie.",
+                confirmTitle: "Naar Positie", destructive: false) { [weak self] in
+                    self?.panelMode = .position
                 }
             return
         }
+        if panelMode == .position && pos == nil { panelMode = .risk }
         let r = { (v: Double) in HLFormat.roundPrice(v, szDecimals: self.szDecimals) }
         var vis = (lo: p * 0.98, hi: p * 1.02)
         if let v = chartCanvas?.visiblePriceRange, v.lo > 0, v.hi > v.lo, v.lo < p, v.hi > p { vis = v }
         let span = max(vis.hi - vis.lo, p * 0.002)
         let dir: Double = long ? 1 : -1
-        let pos = position
         let reducing = pos.map { $0.isLong != long } ?? false
         let adding = pos.map { $0.isLong == long } ?? false
         let entry = atPrice ?? (p - dir * span * (reducing ? -0.06 : 0.04))
         let risk = span * 0.08
 
         var t = Ticket(isLong: long, entries: [TPLevel(price: r(entry), pct: 100)], stopLoss: r(entry - dir * risk), tps: [], isMarket: false)
+        t.riskSized = panelMode == .risk && !reducing
+        t.amountUnit = amountUnit
+        t.amount = amountValue
         if reducing, let pos {
             t.reduceOnly = true
             t.useStopLoss = false
-            t.size = HLFormat.roundSize(abs(pos.size) * 0.5, szDecimals: szDecimals)
-        } else {
+            t.amountUnit = .coin
+            t.amount = HLFormat.roundSize(abs(pos.size) * 0.5, szDecimals: szDecimals)
+        } else if t.riskSized {
             if adding, let sl = existingStopOrder { t.stopLoss = sl.displayPx }
             if !(adding && !existingTPOrders.isEmpty) {
                 let split = lastSplit.isEmpty ? [100] : lastSplit
@@ -112,10 +154,16 @@ extension AppState {
                 }
                 t.moveSLToBreakEven = split.count > 1
             }
-        }
-        if panelMode == .manual && !reducing {
-            t.size = plan(for: t, riskSizing: true)?.size
-            if let pos, adding { t.leverage = pos.leverage }
+        } else {
+            // Bedrag / adding from Positie: last used amount, leverage, stop and TP.
+            t.leverage = pos?.leverage ?? amountLev
+            if adding {
+                if let sl = existingStopOrder { t.stopLoss = sl.displayPx; t.useStopLoss = true } else { t.useStopLoss = false }
+            } else {
+                t.useStopLoss = amountUseStop
+                t.stopLoss = r(entry * (1 - dir * amountSLPct / 100))
+                if amountUseTP { t.tps = [TPLevel(price: r(entry * (1 + dir * amountTPPct / 100)), pct: 100)] }
+            }
         }
         ticket = t
         tab = .trade
@@ -123,36 +171,98 @@ extension AppState {
 
     func panelModeChanged(_ old: PanelMode) {
         guard var t = ticket else { return }
-        if panelMode == .manual { t.size = t.size ?? plan(for: t, riskSizing: true)?.size }
-        if panelMode == .risk {
+        switch panelMode {
+        case .risk:
             if t.reduceOnly { ticket = nil; return }
-            t.lock = .risk; t.size = nil; t.useStopLoss = true
+            t.riskSized = true
+            t.useStopLoss = true
+        case .amount:
+            if t.reduceOnly { ticket = nil; return }
+            if t.riskSized {
+                // Keep the size it had, now as an amount you can change.
+                let size = plan(for: t, riskSizing: true)?.size ?? 0
+                t.riskSized = false
+                t.leverage = t.leverage ?? plan(for: t, riskSizing: true)?.leverage ?? amountLev
+                t.amount = amount(forSize: size, unit: t.amountUnit, t)
+            }
+        case .position:
+            break
         }
         ticket = t
+    }
+
+    /// Positie tab → "Op prijs…": a limit order that reduces the position, shown in the chart.
+    func startReduce(fraction: Double) {
+        guard let pos = position else { return }
+        panelMode = .position
+        newTicket(long: !pos.isLong)
+        ticket?.amount = HLFormat.roundSize(abs(pos.size) * fraction, szDecimals: szDecimals)
     }
 
     // MARK: Editing (panel and chart)
 
     func setTicketRisk(_ pct: Double) {
         riskPercent = min(max(pct, 0.05), 10)
-        ticket?.lock = .risk
-        if panelMode != .manual { ticket?.size = nil }
     }
 
-    func setTicketSize(_ size: Double) {
-        var s = max(size, 0)
-        if ticket?.reduceOnly == true, let pos = position { s = min(s, abs(pos.size)) }
-        ticket?.size = s
-        if panelMode == .risk { ticket?.lock = .size }
+    /// Amount as typed, in the ticket's unit.
+    func setTicketAmount(_ v: Double) {
+        guard var t = ticket else { return }
+        t.amount = max(v, 0)
+        if t.reduceOnly, let pos = position, t.amountUnit == .coin { t.amount = min(t.amount, abs(pos.size)) }
+        ticket = t
+        if panelMode == .amount && !t.reduceOnly { amountValue = t.amount; amountUnit = t.amountUnit }
+    }
+
+    /// Next unit (marge → positie → munten), keeping the same size.
+    func cycleAmountUnit() {
+        guard var t = ticket else { return }
+        let size = derivedSize(t)
+        t.amountUnit = t.amountUnit.next
+        t.amount = amount(forSize: size, unit: t.amountUnit, t)
+        ticket = t
+        if panelMode == .amount && !t.reduceOnly { amountUnit = t.amountUnit; amountValue = t.amount }
     }
 
     func setTicketLeverage(_ lev: Int?) {
         ticket?.leverage = lev.map { min(max($0, 1), asset?.maxLeverage ?? 50) }
+        if panelMode == .amount, let l = ticket?.leverage { amountLev = l }
     }
 
-    func toggleLock() {
-        guard let t = ticket else { return }
-        if t.lock == .risk { ticket?.size = plan?.size; ticket?.lock = .size } else { ticket?.lock = .risk; ticket?.size = nil }
+    /// Stop price from the panel; remembers the distance as the Bedrag default.
+    func setTicketStop(_ px: Double) {
+        guard var t = ticket else { return }
+        t.stopLoss = roundToTick(px)
+        t.useStopLoss = true
+        ticket = t
+        let e = averageEntry(t)
+        if panelMode == .amount, e > 0 { amountSLPct = abs(e - t.stopLoss) / e * 100 }
+    }
+
+    func setTicketTP(_ i: Int, _ px: Double) {
+        guard var t = ticket, t.tps.indices.contains(i) else { return }
+        t.tps[i].price = roundToTick(px)
+        ticket = t
+        let e = averageEntry(t)
+        if panelMode == .amount, i == 0, e > 0 { amountTPPct = abs(t.tps[0].price - e) / e * 100 }
+    }
+
+    func setUseStop(_ on: Bool) {
+        ticket?.useStopLoss = on
+        if panelMode == .amount { amountUseStop = on }
+    }
+
+    func setUseTP(_ on: Bool) {
+        guard var t = ticket else { return }
+        if on && t.tps.isEmpty {
+            let e = averageEntry(t)
+            let dir: Double = t.isLong ? 1 : -1
+            t.tps = [TPLevel(price: roundToTick(e * (1 + dir * amountTPPct / 100)), pct: 100)]
+        } else if !on {
+            t.tps = []
+        }
+        ticket = t
+        if panelMode == .amount { amountUseTP = on }
     }
 
     func roundToTick(_ p: Double) -> Double {

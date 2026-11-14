@@ -26,22 +26,42 @@ struct TPLevel: Equatable, Identifiable {
 
 enum SizeLock: String { case risk, size }
 
-/// The three trade panels.
+/// The three trade tabs.
 enum PanelMode: String, CaseIterable, Identifiable {
-    case risk, quick, manual
+    case risk, amount, position
     var id: String { rawValue }
     var label: String {
         switch self {
         case .risk: return "Risico"
-        case .quick: return "Snel"
-        case .manual: return "Handmatig"
+        case .amount: return "Bedrag"
+        case .position: return "Positie"
         }
     }
-    var hint: String {
+    /// Stored value from older versions (risk / quick / manual).
+    static func stored(_ raw: String?) -> PanelMode {
+        switch raw {
+        case "amount", "quick", "manual": return .amount
+        case "position": return .position
+        default: return .risk
+        }
+    }
+}
+
+/// How the size is typed in the Bedrag tab and when adding.
+enum AmountUnit: String, CaseIterable {
+    case margin, notional, coin
+    func label(coin: String) -> String {
         switch self {
-        case .risk: return "Je stop en je max verlies bepalen de grootte. Pak het slotje om dat om te draaien."
-        case .quick: return "Vaste orderwaarde, één klik market in en uit."
-        case .manual: return "Alles vrij invullen. Grip rekent mee en waarschuwt alleen."
+        case .margin: return "$ marge"
+        case .notional: return "$ positie"
+        case .coin: return coin
+        }
+    }
+    var next: AmountUnit {
+        switch self {
+        case .margin: return .notional
+        case .notional: return .coin
+        case .coin: return .margin
         }
     }
 }
@@ -59,10 +79,13 @@ struct Ticket: Equatable {
     var size: Double? = nil           // coins, set by hand (lock on size, or the manual panel)
     var leverage: Int? = nil          // nil = automatic (minimum needed, never below the current leverage)
     var moveSLToBreakEven = false
-    /// Opposite of the open position: makes it smaller (manual panel only).
+    /// Opposite of the open position: makes it smaller (Positie tab).
     var reduceOnly = false
-    /// Manual panel: show and type the size in dollars instead of coins.
-    var sizeInUsd = false
+    /// Bedrag tab, adding and reducing: the size as typed, in `amountUnit`.
+    var amount: Double = 0
+    var amountUnit: AmountUnit = .margin
+    /// Sized by your max loss (Risico) instead of by the amount.
+    var riskSized = true
 
     var entry: Double {
         get { entries.first?.price ?? 0 }
@@ -267,13 +290,25 @@ final class AppState: ObservableObject {
     @Published var eventPrefs: [String: EventPref] = AppState.loadJSON([String: EventPref].self, "eventPrefs") ?? [:] {
         didSet { saveJSON(eventPrefs, "eventPrefs") }
     }
-    @Published var panelMode: PanelMode = PanelMode(rawValue: UserDefaults.standard.string(forKey: "panelMode") ?? "") ?? .risk {
+    @Published var panelMode: PanelMode = PanelMode.stored(UserDefaults.standard.string(forKey: "panelMode")) {
         didSet { defaults.set(panelMode.rawValue, forKey: "panelMode"); panelModeChanged(oldValue) }
     }
     /// Last used take-profit split, e.g. [50, 30, 20].
     @Published var lastSplit: [Double] = UserDefaults.standard.array(forKey: "lastSplit") as? [Double] ?? [50, 30, 20] {
         didSet { defaults.set(lastSplit, forKey: "lastSplit") }
     }
+    // Bedrag tab: last used values
+    @Published var amountValue: Double = UserDefaults.standard.object(forKey: "amountValue") as? Double ?? 50 { didSet { defaults.set(amountValue, forKey: "amountValue") } }
+    @Published var amountUnit: AmountUnit = AmountUnit(rawValue: UserDefaults.standard.string(forKey: "amountUnit") ?? "") ?? .margin { didSet { defaults.set(amountUnit.rawValue, forKey: "amountUnit") } }
+    @Published var amountLev: Int = UserDefaults.standard.object(forKey: "amountLev") as? Int ?? 5 { didSet { defaults.set(amountLev, forKey: "amountLev") } }
+    @Published var amountUseStop: Bool = UserDefaults.standard.object(forKey: "amountUseStop") as? Bool ?? true { didSet { defaults.set(amountUseStop, forKey: "amountUseStop") } }
+    @Published var amountSLPct: Double = UserDefaults.standard.object(forKey: "amountSLPct") as? Double ?? 1.0 { didSet { defaults.set(amountSLPct, forKey: "amountSLPct") } }
+    @Published var amountUseTP: Bool = UserDefaults.standard.object(forKey: "amountUseTP") as? Bool ?? false { didSet { defaults.set(amountUseTP, forKey: "amountUseTP") } }
+    @Published var amountTPPct: Double = UserDefaults.standard.object(forKey: "amountTPPct") as? Double ?? 2.0 { didSet { defaults.set(amountTPPct, forKey: "amountTPPct") } }
+    /// Stop / take-profit fields show % from the entry instead of a price.
+    @Published var stopInPct: Bool = UserDefaults.standard.bool(forKey: "stopInPct") { didSet { defaults.set(stopInPct, forKey: "stopInPct") } }
+    @Published var tpInPct: Bool = UserDefaults.standard.bool(forKey: "tpInPct") { didSet { defaults.set(tpInPct, forKey: "tpInPct") } }
+    @Published var showMoreOptions: Bool = UserDefaults.standard.bool(forKey: "showMoreOptions") { didSet { defaults.set(showMoreOptions, forKey: "showMoreOptions") } }
     @Published var quickUsd: Double = UserDefaults.standard.object(forKey: "quickUsd") as? Double ?? 1000 { didSet { defaults.set(quickUsd, forKey: "quickUsd") } }
     @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 { didSet { defaults.set(quickLev, forKey: "quickLev") } }
     @Published var quickSLPct: Double = UserDefaults.standard.object(forKey: "quickSLPct") as? Double ?? 0.5 { didSet { defaults.set(quickSLPct, forKey: "quickSLPct") } }
@@ -889,7 +924,7 @@ final class AppState: ObservableObject {
 
     var chartLines: [ChartLine] {
         var lines: [ChartLine] = []
-        let t = panelMode == .quick ? nil : ticket
+        let t = ticket
         if let t {
             let pl = plan
             for (i, tp) in t.tps.enumerated() where !t.reduceOnly {

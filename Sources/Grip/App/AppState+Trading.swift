@@ -35,7 +35,7 @@ extension AppState {
     func lineClosed(_ id: LineID) {
         switch id {
         case .ticketEntry(let i): removeTicketEntry(i)
-        case .ticketSL: if panelMode == .manual { ticket?.useStopLoss = false }
+        case .ticketSL: if ticket?.riskSized == false { setUseStop(false) }
         case .ticketLiq, .pendingTP: break
         case .ticketTP(let i): removeTicketTP(i)
         case .order(let oid):
@@ -76,9 +76,9 @@ extension AppState {
 
     // MARK: Quick panel
 
-    /// Market in with a fixed order value; SL and TP as a % of the price.
+    /// ⌥B / ⌥N: market order with the Bedrag tab's last values (amount, leverage, stop, TP), after confirmation.
     func quickTrade(long: Bool) {
-        guard let a = asset, price > 0 else { return }
+        guard price > 0, asset != nil else { return }
         if let pos = position, pos.isLong != long {
             let side = pos.isLong ? "long" : "short"
             pendingConfirm = ConfirmRequest(
@@ -87,55 +87,10 @@ extension AppState {
                 confirmTitle: "Hele positie sluiten", destructive: true) { [weak self] in Task { await self?.closePosition(fraction: 1) } }
             return
         }
-        let p = price
-        let size = HLFormat.roundSize(quickUsd / p, szDecimals: a.szDecimals, down: true)
-        let dir: Double = long ? 1 : -1
-        let sl = HLFormat.roundPrice(p * (1 - dir * quickSLPct / 100), szDecimals: a.szDecimals)
-        let tp = HLFormat.roundPrice(p * (1 + dir * quickTPPct / 100), szDecimals: a.szDecimals)
-        let risk = size * (abs(p - sl) + feeRates.taker * (p + sl))
-        let go = { [weak self] in Task { await self?.placeQuick(long: long, size: size, sl: sl, tp: tp) } }
-        guard confirmMarketOrders else { go(); return }
-        let side = long ? "long" : "short"
-        pendingConfirm = ConfirmRequest(
-            title: "Market \(side) \(coin)?",
-            message: "\(fmt.size(size, coin: coin, decimals: a.szDecimals)) ≈ \(fmt.usd(size * p)) · \(quickLev)×\nSL \(Fmt.price(sl)) (\(fmt.signedUsd(-risk, decimals: 2))) · TP \(Fmt.price(tp))",
-            confirmTitle: "Market \(side)", destructive: false) { go() }
-    }
-
-    private func placeQuick(long: Bool, size: Double, sl: Double, tp: Double) async {
-        guard let a = asset else { return }
-        guard size * price >= 10 else { toast("Hyperliquid vereist minimaal $10 per order.", .error); return }
-        guard hasAccount else { toast("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan.", .error); return }
-        busy = true
-        defer { busy = false }
-        do {
-            let pos = position
-            let lev = min(max(quickLev, 1), a.maxLeverage)
-            if let pos {
-                if lev > pos.leverage { try await execLeverage(a, isCross: pos.isCross, leverage: lev) }
-            } else {
-                try await execLeverage(a, isCross: useCrossMargin && !a.onlyIsolated, leverage: lev)
-            }
-            let px = HLFormat.slippagePrice(price, isBuy: long, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
-            var reqs = [OrderRequest(asset: a, isBuy: long, size: size, limitPx: px, reduceOnly: false, kind: .limit(tif: "Ioc"))]
-            if pos == nil {
-                reqs.append(OrderRequest(asset: a, isBuy: !long, size: size, limitPx: sl, reduceOnly: true, kind: .trigger(triggerPx: sl, isMarket: true, tpsl: .sl)))
-            }
-            // Adding: the existing stop and take-profits grow with the position.
-            var m = managed[coin] ?? ManagedTrade(isLong: long, lastSize: 0)
-            m.isLong = long
-            m.lastSize = abs(pos?.size ?? 0)
-            m.stop = pos == nil ? sl : (existingStopOrder?.displayPx ?? sl)
-            if existingTPOrders.isEmpty { m.tps = PendingTPs(entryOid: 0, isLong: long, prices: [tp], fractions: [1]) }
-            managed[coin] = m
-            let st = try await execOrders(reqs, grouping: pos == nil ? "normalTpsl" : "na")
-            try throwIfRejected(st)
-            await refreshAccount()
-            await refreshHistory()
-        } catch {
-            toast(error.localizedDescription, .error)
-            notify(.orderProblem, "Order niet geplaatst", error.localizedDescription)
-        }
+        if panelMode != .amount { panelMode = .amount }
+        newTicket(long: long)
+        ticket?.isMarket = true
+        requestPlaceTicket()
     }
 
     /// Market close of everything on the current coin (quick panel / ⌥X).
