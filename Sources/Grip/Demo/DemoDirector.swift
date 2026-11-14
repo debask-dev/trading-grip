@@ -92,7 +92,7 @@ final class DemoDirector {
         try await dragLine(.ticketTP(0), toPrice: p * 1.017)
         try await sleep(0.6)
         caption("Grip rekent direct je positiegrootte en hefboom uit")
-        try await dragLine(.ticketEntry, toPrice: p * 0.9985)
+        try await dragLine(.ticketEntry(0), toPrice: p * 0.9985)
         try await sleep(1.4)
 
         // 5. Place at market (fills immediately in oefenmodus)

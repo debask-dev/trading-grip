@@ -46,17 +46,41 @@ enum PanelMode: String, CaseIterable, Identifiable {
     }
 }
 
-/// The order being prepared on the chart before it is sent.
+/// The order being prepared on the chart before it is sent ("Nieuwe order").
 struct Ticket: Equatable {
-    var entry: Double
+    var isLong: Bool
+    /// One or more entries (price + share of the new size).
+    var entries: [TPLevel]
     var stopLoss: Double
+    var useStopLoss = true
     var tps: [TPLevel]
-    var isMarket: Bool
+    var isMarket: Bool                // first entry at market
     var lock: SizeLock = .risk
-    var size: Double? = nil          // set by hand (lock on size, or the manual panel)
-    var leverage: Int? = nil         // nil = the minimum needed
+    var size: Double? = nil           // coins, set by hand (lock on size, or the manual panel)
+    var leverage: Int? = nil          // nil = automatic (minimum needed, never below the current leverage)
     var moveSLToBreakEven = false
+    /// Opposite of the open position: makes it smaller (manual panel only).
+    var reduceOnly = false
+    /// Manual panel: show and type the size in dollars instead of coins.
+    var sizeInUsd = false
+
+    var entry: Double {
+        get { entries.first?.price ?? 0 }
+        set { if entries.isEmpty { entries = [TPLevel(price: newValue, pct: 100)] } else { entries[0].price = newValue } }
+    }
     var takeProfit: Double? { tps.first?.price }
+}
+
+/// What Grip keeps in line for a trade it placed: the stop covers the whole position, TPs grow with it,
+/// and unfilled entries are cancelled when the position is closed.
+struct ManagedTrade: Codable, Equatable {
+    var isLong: Bool
+    var stop: Double?
+    var entryOids: [Int64] = []
+    /// Position size the last time Grip looked (to see entries filling).
+    var lastSize: Double
+    /// Take-profit ladder still to be placed after the first fill.
+    var tps: PendingTPs?
 }
 
 /// Take-profits waiting for a limit entry to fill (Hyperliquid only accepts them once there is a position).
@@ -83,7 +107,7 @@ struct Toast: Identifiable, Equatable {
 }
 
 enum LineID: Hashable {
-    case ticketEntry, ticketSL, ticketTP(Int), ticketLiq, order(Int64), position, breakEven, liquidation
+    case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, order(Int64), position, breakEven, liquidation
 }
 
 /// A buy/sell marker on the chart.
@@ -135,7 +159,7 @@ struct ChartLine: Identifiable, Equatable {
 @MainActor
 final class AppState: ObservableObject {
     private let defaults = UserDefaults.standard
-    private let store = JSONStore()
+    let store = JSONStore()
 
     // MARK: Settings
     @Published var network: HLNetwork {
@@ -255,9 +279,10 @@ final class AppState: ObservableObject {
     @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 { didSet { defaults.set(quickLev, forKey: "quickLev") } }
     @Published var quickSLPct: Double = UserDefaults.standard.object(forKey: "quickSLPct") as? Double ?? 0.5 { didSet { defaults.set(quickSLPct, forKey: "quickSLPct") } }
     @Published var quickTPPct: Double = UserDefaults.standard.object(forKey: "quickTPPct") as? Double ?? 1.0 { didSet { defaults.set(quickTPPct, forKey: "quickTPPct") } }
-    @Published var pendingTPs: [String: PendingTPs] = AppState.loadJSON([String: PendingTPs].self, "pendingTPs") ?? [:] {
-        didSet { saveJSON(pendingTPs, "pendingTPs") }
+    @Published var managed: [String: ManagedTrade] = AppState.loadJSON([String: ManagedTrade].self, "managedTrades") ?? [:] {
+        didSet { saveJSON(managed, "managedTrades") }
     }
+    var reconciling = false
     /// Coins whose stop moves to break-even after the first take-profit.
     @Published var breakEvenAfterTP: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "breakEvenAfterTP") ?? []) {
         didSet { defaults.set(Array(breakEvenAfterTP), forKey: "breakEvenAfterTP") }
@@ -365,18 +390,6 @@ final class AppState: ObservableObject {
     /// Account value used for sizing; a $10k example when no account is connected yet.
     var sizingEquity: Double { account.accountValue > 0 ? account.accountValue : 10_000 }
     var isExampleEquity: Bool { account.accountValue <= 0 }
-
-    var riskResult: RiskResult? {
-        guard let t = ticket else { return nil }
-        let entry = t.isMarket ? price : t.entry
-        var input = RiskInput(accountValue: sizingEquity, riskPercent: riskPercent, entry: entry, stopLoss: t.stopLoss,
-                              takeProfit: t.takeProfit, maxLeverage: asset?.maxLeverage ?? 20, szDecimals: szDecimals,
-                              takerFeeRate: feeRates.taker, entryFeeRate: t.isMarket ? feeRates.taker : feeRates.maker)
-        input.takeProfits = t.tps.map { TPTarget(price: $0.price, fraction: $0.pct / 100) }
-        if t.lock == .size || panelMode == .manual { input.sizeOverride = t.size }
-        input.leverageOverride = t.leverage
-        return RiskCalculator.calculate(input)
-    }
 
     // MARK: Lifecycle
 
@@ -549,7 +562,7 @@ final class AppState: ObservableObject {
             }
             previousOrders = state.openOrders
             account = state
-            await checkPendingTPs()
+            await reconcileManaged()
             accountError = nil
             // Drop optimistic drag prices once the exchange reflects them (or the order is gone).
             pendingOrderPrices = pendingOrderPrices.filter { oid, px in
@@ -638,187 +651,6 @@ final class AppState: ObservableObject {
     func loadSigner() throws -> EthSigner {
         guard let key = Keychain.load(account: keyAccount) else { throw HLError.notConfigured }
         return try EthSigner(privateKeyHex: key)
-    }
-
-    // MARK: Ticket
-
-    /// New order ticket. Lines are placed inside what is visible on the chart, so nothing starts off-screen.
-    func newTicket(long: Bool, entry atPrice: Double? = nil) {
-        let p = price
-        guard p > 0 else { return }
-        if panelMode == .quick { panelMode = .risk }
-        let r = { (v: Double) in HLFormat.roundPrice(v, szDecimals: self.szDecimals) }
-        // Use what is visible on the chart, unless that is not known yet (chart not drawn) or nonsensical.
-        var vis = (lo: p * 0.98, hi: p * 1.02)
-        if let v = chartCanvas?.visiblePriceRange, v.lo > 0, v.hi > v.lo, v.lo < p, v.hi > p { vis = v }
-        let span = max(vis.hi - vis.lo, p * 0.002)
-        let dir: Double = long ? 1 : -1
-        let entry = atPrice ?? (p - dir * span * 0.04)
-        let risk = span * 0.08
-        let split = lastSplit.isEmpty ? [100] : lastSplit
-        let edge = long ? vis.hi - span * 0.04 : vis.lo + span * 0.04
-        var tps: [TPLevel] = []
-        for (i, pct) in split.enumerated() {
-            var px = entry + dir * risk * (1.5 + Double(i))
-            if long ? px > edge : px < edge { px = entry + (edge - entry) * Double(i + 1) / Double(split.count) }
-            tps.append(TPLevel(price: r(px), pct: pct))
-        }
-        ticket = Ticket(entry: r(entry), stopLoss: r(entry - dir * risk), tps: tps, isMarket: false,
-                        size: nil, leverage: nil, moveSLToBreakEven: split.count > 1)
-        if panelMode == .manual { ticket?.size = riskResult?.size }
-        tab = .trade
-    }
-
-    private func panelModeChanged(_ old: PanelMode) {
-        guard var t = ticket else { return }
-        if panelMode == .manual { t.size = t.size ?? riskResult?.size }
-        if panelMode == .risk { t.lock = .risk; t.size = nil }
-        ticket = t
-    }
-
-    // MARK: Ticket editing (panel and chart)
-
-    func setTicketRisk(_ pct: Double) {
-        riskPercent = min(max(pct, 0.05), 10)
-        ticket?.lock = .risk
-        if panelMode != .manual { ticket?.size = nil }
-    }
-
-    func setTicketSize(_ size: Double) {
-        ticket?.size = max(size, 0)
-        if panelMode == .risk { ticket?.lock = .size }
-    }
-
-    func setTicketLeverage(_ lev: Int) {
-        ticket?.leverage = min(max(lev, 1), asset?.maxLeverage ?? 50)
-    }
-
-    func toggleLock() {
-        guard let t = ticket else { return }
-        if t.lock == .risk { ticket?.size = riskResult?.size; ticket?.lock = .size } else { ticket?.lock = .risk; ticket?.size = nil }
-    }
-
-    func addTicketTP(at px: Double? = nil) {
-        guard var t = ticket else { return }
-        let dir: Double = t.stopLoss < t.entry ? 1 : -1
-        let risk = abs(t.entry - t.stopLoss)
-        let last = t.tps.last?.price ?? t.entry
-        t.tps.append(TPLevel(price: roundToTick(px ?? (last + dir * risk)), pct: 0))
-        let n = t.tps.count
-        t.tps = applySplit(lastSplit.count == n ? lastSplit : Array(repeating: (100 / Double(n) / 5).rounded(.down) * 5, count: n), to: t.tps)
-        ticket = t
-        lastSplit = t.tps.map(\.pct)
-    }
-
-    func removeTicketTP(_ i: Int) {
-        guard var t = ticket, t.tps.indices.contains(i), t.tps.count > 1 else { return }
-        let removed = t.tps.remove(at: i)
-        t.tps[t.tps.count - 1].pct += removed.pct
-        if t.tps.count == 1 { t.moveSLToBreakEven = false }
-        ticket = t
-        lastSplit = t.tps.map(\.pct)
-    }
-
-    /// Sets one TP's share; the last TP (or the one before it) absorbs the difference so the total stays 100%.
-    func setTPPct(_ i: Int, _ value: Double) {
-        guard var t = ticket, t.tps.indices.contains(i), t.tps.count > 1 else { return }
-        let v = min(max((value / 5).rounded() * 5, 5), 100 - 5 * Double(t.tps.count - 1))
-        t.tps[i].pct = v
-        let k = i == t.tps.count - 1 ? t.tps.count - 2 : t.tps.count - 1
-        let rest = 100 - t.tps.reduce(0) { $0 + $1.pct }
-        t.tps[k].pct = max(5, t.tps[k].pct + rest)
-        ticket = t
-        lastSplit = t.tps.map(\.pct)
-    }
-
-    func applySplitPreset(_ parts: [Double]) {
-        guard var t = ticket else { return }
-        t.tps = applySplit(parts, to: t.tps)
-        ticket = t
-        lastSplit = t.tps.map(\.pct)
-    }
-
-    private func applySplit(_ parts: [Double], to tps: [TPLevel]) -> [TPLevel] {
-        var out = tps
-        let n = out.count
-        guard n > 0 else { return out }
-        var p = Array(parts.prefix(n))
-        while p.count < n { p.append(5) }
-        p[n - 1] += 100 - p.reduce(0, +)
-        for i in 0..<n { out[i].pct = p[i] }
-        return out
-    }
-
-    func roundToTick(_ p: Double) -> Double {
-        let t = priceTick
-        return HLFormat.roundPrice((p / t).rounded() * t, szDecimals: szDecimals)
-    }
-
-    /// Asks for confirmation first when the entry is a market order (setting).
-    func requestPlaceTicket() {
-        guard let t = ticket, let r = riskResult else { return }
-        if t.isMarket && confirmMarketOrders {
-            let side = r.isLong ? "long" : "short"
-            pendingConfirm = ConfirmRequest(
-                title: "Market \(side) openen?",
-                message: "\(fmt.size(r.size, coin: coin, decimals: szDecimals)) · ≈ \(Fmt.price(price)) · \(r.leverage)×\nRisico tot je stop: \(fmt.usd(-r.riskUsd, decimals: 2)) (incl. ≈ \(fmt.usd(r.estFees, decimals: 2)) fees)",
-                confirmTitle: "Market \(side)", destructive: false) { [weak self] in Task { await self?.placeTicket() } }
-        } else {
-            Task { await placeTicket() }
-        }
-    }
-
-    func placeTicket() async {
-        guard let t = ticket, let a = asset, let r = riskResult else { return }
-        guard r.size > 0 else { toast("Positie is te klein.", .error); return }
-        guard r.notional >= 10 else { toast("Hyperliquid vereist minimaal $10 per order.", .error); return }
-        guard hasAccount else { toast("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan.", .error); return }
-        busy = true
-        defer { busy = false }
-        do {
-            let available = max(account.withdrawable, 1)
-            var lev = t.leverage ?? max(r.leverage, Int((r.notional / (available * 0.95)).rounded(.up)))
-            lev = min(max(lev, 1), a.maxLeverage)
-            let cross = useCrossMargin && !a.onlyIsolated
-            try await execLeverage(a, isCross: cross, leverage: lev)
-
-            let isBuy = r.isLong
-            let entryPx = t.isMarket ? HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals) : t.entry
-            let refEntry = t.isMarket ? price : t.entry
-            let reqs = [
-                OrderRequest(asset: a, isBuy: isBuy, size: r.size, limitPx: entryPx, reduceOnly: false, kind: .limit(tif: t.isMarket ? "Ioc" : "Gtc")),
-                OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: t.stopLoss, reduceOnly: true, kind: .trigger(triggerPx: t.stopLoss, isMarket: true, tpsl: .sl)),
-            ]
-            let statuses = try await execOrders(reqs, grouping: "normalTpsl")
-            // Take-profits are reduce-only limit orders (maker fee): placed right after the fill.
-            let ladder = t.tps.filter { isBuy ? $0.price > refEntry : $0.price < refEntry }
-            let total = max(ladder.reduce(0) { $0 + $1.pct }, 1)
-            let pending = PendingTPs(entryOid: 0, isLong: isBuy, prices: ladder.map(\.price), fractions: ladder.map { $0.pct / total })
-            if t.moveSLToBreakEven && ladder.count > 1 { breakEvenAfterTP.insert(coin) } else { breakEvenAfterTP.remove(coin) }
-
-            let plan = TradePlan(coin: coin, isLong: isBuy, entry: refEntry, stopLoss: t.stopLoss, takeProfit: t.takeProfit,
-                                 riskUsd: r.riskUsd, riskPercent: riskPercent)
-            plans.append(plan)
-            if !isDemoVideo { store.save(plans, to: "plans") }
-
-            switch statuses.first {
-            case .filled?:
-                await refreshAccount()
-                if !ladder.isEmpty { await placeTakeProfits(coin: coin, pending) }
-            case .resting(let oid)?:
-                if !ladder.isEmpty { var p = pending; p.entryOid = oid; pendingTPs[coin] = p }
-                toast("Limit \(isBuy ? "long" : "short") geplaatst @ \(Fmt.price(entryPx)) · \(lev)×", .success)
-                notify(.orderPlaced, "Limit \(isBuy ? "long" : "short") geplaatst", "\(coin) @ \(Fmt.price(entryPx)) · \(lev)×")
-            default:
-                toast("Order verstuurd.", .success)
-            }
-            ticket = nil
-            await refreshAccount()
-            if case .filled? = statuses.first { await refreshHistory() }
-        } catch {
-            toast(error.localizedDescription, .error)
-            notify(.orderProblem, "Order niet geplaatst", error.localizedDescription)
-        }
     }
 
     // MARK: Orders & position management
@@ -914,6 +746,7 @@ final class AppState: ObservableObject {
         let req = OrderRequest(asset: a, isBuy: o.isBuy, size: size, limitPx: px, reduceOnly: o.reduceOnly, kind: kind)
         do {
             try await execModify(oid: oid, req)
+            if o.isTrigger && o.tpsl == .sl { managed[o.coin]?.stop = px }
             toast("\(orderName(o)) verplaatst naar \(Fmt.price(px))", .success)
         } catch {
             pendingOrderPrices[oid] = nil
@@ -1019,17 +852,26 @@ final class AppState: ObservableObject {
 
     var chartLines: [ChartLine] {
         var lines: [ChartLine] = []
-        if let t = ticket, panelMode != .quick {
-            for (i, tp) in t.tps.enumerated() {
-                lines.append(ChartLine(id: .ticketTP(i), price: tp.price, color: Palette.green, dashed: true, draggable: true, closable: t.tps.count > 1))
+        let t = panelMode == .quick ? nil : ticket
+        if let t {
+            let pl = plan
+            for (i, tp) in t.tps.enumerated() where !t.reduceOnly {
+                lines.append(ChartLine(id: .ticketTP(i), price: tp.price, color: Palette.green, dashed: true, draggable: true, closable: true))
             }
-            lines.append(ChartLine(id: .ticketSL, price: t.stopLoss, color: Palette.red, dashed: true, draggable: true))
-            if !t.isMarket { lines.append(ChartLine(id: .ticketEntry, price: t.entry, color: Palette.blue, dashed: true, draggable: true, closable: true)) }
-            if let r = riskResult, r.estLiquidationPx > 0 {
-                lines.append(ChartLine(id: .ticketLiq, price: r.estLiquidationPx, color: Palette.red.withAlphaComponent(0.7), dashed: true, draggable: false))
+            if t.useStopLoss && !t.reduceOnly {
+                lines.append(ChartLine(id: .ticketSL, price: t.stopLoss, color: Palette.red, dashed: true, draggable: true))
+            }
+            for (i, e) in t.entries.enumerated() where !(t.isMarket && i == 0) {
+                lines.append(ChartLine(id: .ticketEntry(i), price: e.price, color: t.reduceOnly ? Palette.orange : (pl?.isAdd == true ? Palette.accent : Palette.blue),
+                                       dashed: true, draggable: true, closable: true))
+            }
+            if let pl, !t.reduceOnly, pl.estLiquidationPx > 0 {
+                lines.append(ChartLine(id: .ticketLiq, price: pl.estLiquidationPx, color: Palette.red.withAlphaComponent(0.7), dashed: true, draggable: false))
             }
         }
-        for o in coinOrders {
+        // While adding, the ticket's stop line stands for the position's stop.
+        let hideStop = t.map { $0.useStopLoss && !$0.reduceOnly && position != nil } ?? false
+        for o in coinOrders where !(hideStop && o.isTrigger && o.tpsl == .sl) {
             let px = pendingOrderPrices[o.oid] ?? o.displayPx
             let color: NSColor = o.isTrigger ? (o.tpsl == .tp ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.orange : Palette.blue)
             lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: !o.isTrigger, draggable: true, closable: true))
@@ -1047,19 +889,26 @@ final class AppState: ObservableObject {
         let f = fmt
         let eq = max(account.accountValue, 1)
         switch id {
-        case .ticketEntry:
-            guard let r = riskResult else { return "ENTRY \(Fmt.price(px))" }
-            return "LIMIT \(r.isLong ? "LONG" : "SHORT")  \(f.size(r.size, coin: coin, decimals: szDecimals))  ·  \(r.leverage)×"
+        case .ticketEntry(let i):
+            guard let t = ticket, let pl = plan else { return "ENTRY \(Fmt.price(px))" }
+            let sz = pl.entrySizes.indices.contains(i) ? pl.entrySizes[i] : 0
+            if t.reduceOnly { return "VERKLEIN \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(f.signedUsd(pl.reducePnl ?? 0))" }
+            let side = t.isLong ? "LONG" : "SHORT"
+            if t.entries.count == 1 {
+                return "\(pl.isAdd ? "BIJ" : "LIMIT") \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×"
+            }
+            return "E\(i + 1) · \(Int(t.entries[i].pct))%  \(f.size(sz, coin: coin, decimals: szDecimals))"
         case .ticketSL:
-            guard let r = riskResult else { return "SL \(Fmt.price(px))" }
-            return "SL  \(f.signedUsd(-r.riskUsd))  (−\(Fmt.number(r.riskPercentActual, decimals: 2))%)"
+            guard let pl = plan, let risk = pl.riskUsd else { return "SL \(Fmt.price(px))" }
+            return "SL\(pl.isAdd ? " hele positie" : "")  \(f.signedUsd(-risk))  (−\(Fmt.number(pl.riskPercentActual ?? 0, decimals: 2))%)"
         case .ticketTP(let i):
-            guard let t = ticket, t.tps.indices.contains(i), let r = riskResult else { return "TP \(Fmt.price(px))" }
+            guard let t = ticket, t.tps.indices.contains(i), let pl = plan else { return "TP \(Fmt.price(px))" }
             let lvl = t.tps[i]
-            let qty = r.size * lvl.pct / 100
-            let profit = qty * abs(px - t.entry) - qty * feeRates.maker * (t.entry + px)
-            let rr = abs(px - t.entry) / max(abs(t.entry - t.stopLoss), 1e-12)
-            return "TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))  ·  \(Fmt.number(rr, decimals: 1))R"
+            let avg = pl.after.avgEntry
+            let qty = pl.after.size * lvl.pct / 100
+            let profit = qty * (t.isLong ? px - avg : avg - px) - qty * feeRates.maker * (avg + px)
+            let rr = t.useStopLoss ? " · \(Fmt.number(abs(px - avg) / max(abs(avg - t.stopLoss), 1e-12), decimals: 1))R" : ""
+            return "TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))\(rr)"
         case .ticketLiq:
             return "LIQ ≈ \(Fmt.price(px))"
         case .order(let oid):
@@ -1092,7 +941,7 @@ final class AppState: ObservableObject {
     func chartLineDragged(_ id: LineID, price raw: Double, ended: Bool) {
         let px = roundToTick(raw)
         switch id {
-        case .ticketEntry: ticket?.entry = px
+        case .ticketEntry(let i): if ticket?.entries.indices.contains(i) == true { ticket?.entries[i].price = px }
         case .ticketSL: ticket?.stopLoss = px
         case .ticketTP(let i): if ticket?.tps.indices.contains(i) == true { ticket?.tps[i].price = px }
         case .ticketLiq: break

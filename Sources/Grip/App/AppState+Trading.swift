@@ -8,8 +8,9 @@ import UniformTypeIdentifiers
 
 extension AppState {
     /// Places the ladder as reduce-only GTC limit orders; the last level gets whatever is left.
-    func placeTakeProfits(coin c: String, _ p: PendingTPs) async {
-        guard let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return }
+    @discardableResult
+    func placeTakeProfits(coin c: String, _ p: PendingTPs) async -> Bool {
+        guard let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return false }
         let total = abs(pos.size)
         var left = total
         var reqs: [OrderRequest] = []
@@ -22,29 +23,17 @@ extension AppState {
             reqs.append(OrderRequest(asset: a, isBuy: !pos.isLong, size: HLFormat.roundSize(sz, szDecimals: a.szDecimals),
                                      limitPx: HLFormat.roundPrice(px, szDecimals: a.szDecimals), reduceOnly: true, kind: .limit(tif: "Gtc")))
         }
-        guard !reqs.isEmpty else { return }
+        guard !reqs.isEmpty else { return true }
         do {
             let st = try await execOrders(reqs)
             for s in st { if case .resting(let oid) = s { orderKinds[oid] = .takeProfit } }
-            pendingTPs[c] = nil
             toast("\(reqs.count) take-profit\(reqs.count > 1 ? "s" : "") geplaatst", .success)
+            await refreshAccount()
+            return true
         } catch {
             toast("Take-profits niet geplaatst: \(error.localizedDescription)", .error)
             notify(.orderProblem, "Take-profits niet geplaatst", error.localizedDescription)
-        }
-        await refreshAccount()
-    }
-
-    /// Called after every account refresh: a limit entry with a waiting TP ladder got filled → place it.
-    func checkPendingTPs() async {
-        for (c, p) in pendingTPs {
-            let stillResting = account.openOrders.contains { $0.oid == p.entryOid }
-            if let pos = account.position(for: c), pos.isLong == p.isLong {
-                // Wait until the entry is completely filled, so the ladder matches the full size.
-                if !stillResting { await placeTakeProfits(coin: c, p) }
-            } else if !stillResting {
-                pendingTPs[c] = nil       // cancelled without a fill
-            }
+            return false
         }
     }
 
@@ -63,6 +52,7 @@ extension AppState {
                                kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))
         do {
             try await execModify(oid: sl.oid, req)
+            managed[c]?.stop = px
             breakEvenAfterTP.remove(c)
             toast("Stop-loss naar break-even: \(Fmt.price(px))", .success)
         } catch {
@@ -74,13 +64,11 @@ extension AppState {
     /// ✕ on a chart line.
     func lineClosed(_ id: LineID) {
         switch id {
-        case .ticketEntry: ticket = nil
-        case .ticketSL, .ticketLiq: break
+        case .ticketEntry(let i): removeTicketEntry(i)
+        case .ticketSL: if panelMode == .manual { ticket?.useStopLoss = false }
+        case .ticketLiq: break
         case .ticketTP(let i): removeTicketTP(i)
         case .order(let oid):
-            if let o = account.openOrders.first(where: { $0.oid == oid }), !o.reduceOnly, !o.isTrigger, pendingTPs[o.coin]?.entryOid == oid {
-                pendingTPs[o.coin] = nil
-            }
             Task { await cancelOrder(oid) }
         case .position: requestClose(fraction: 1)
         case .breakEven, .liquidation: break
@@ -93,16 +81,20 @@ extension AppState {
         let p = price
         var items: [(String, @MainActor () -> Void)] = []
         if let t = ticket {
-            items.append(("Entry hier", { [weak self] in self?.ticket?.entry = px; self?.ticket?.isMarket = false }))
-            let long = t.stopLoss < t.entry
-            if long ? px < t.entry : px > t.entry {
-                items.append(("Stop-loss hier", { [weak self] in self?.ticket?.stopLoss = px }))
-            } else {
-                items.append(("Take-profit hier", { [weak self] in self?.addTicketTP(at: px) }))
+            items.append((t.entries.count > 1 ? "E1 hier" : "Entry hier", { [weak self] in self?.ticket?.entry = px; self?.ticket?.isMarket = false }))
+            items.append(("Extra entry hier", { [weak self] in self?.addTicketEntry(at: px) }))
+            if !t.reduceOnly {
+                if t.isLong ? px < t.entry : px > t.entry {
+                    items.append(("Stop-loss hier", { [weak self] in self?.ticket?.stopLoss = px; self?.ticket?.useStopLoss = true }))
+                } else {
+                    items.append(("Take-profit hier", { [weak self] in self?.addTicketTP(at: px) }))
+                }
             }
             items.append(("-", {}))
         }
-        if p > 0 {
+        if let pos = position, ticket == nil {
+            items.append(("Bijkopen hier (\(pos.isLong ? "long" : "short"))", { [weak self] in self?.newTicket(long: pos.isLong, entry: px) }))
+        } else if p > 0 && ticket == nil {
             items.append((px < p ? "Limit long hier" : "Limit short hier", { [weak self] in self?.newTicket(long: px < p, entry: px) }))
         }
         if position != nil {
@@ -117,6 +109,14 @@ extension AppState {
     /// Market in with a fixed order value; SL and TP as a % of the price.
     func quickTrade(long: Bool) {
         guard let a = asset, price > 0 else { return }
+        if let pos = position, pos.isLong != long {
+            let side = pos.isLong ? "long" : "short"
+            pendingConfirm = ConfirmRequest(
+                title: "Je zit \(side) in \(coin)",
+                message: "Een market \(long ? "long" : "short") zou je \(side) verkleinen in plaats van een nieuwe trade te openen. Wil je je positie sluiten?",
+                confirmTitle: "Hele positie sluiten", destructive: true) { [weak self] in Task { await self?.closePosition(fraction: 1) } }
+            return
+        }
         let p = price
         let size = HLFormat.roundSize(quickUsd / p, szDecimals: a.szDecimals, down: true)
         let dir: Double = long ? 1 : -1
@@ -139,16 +139,27 @@ extension AppState {
         busy = true
         defer { busy = false }
         do {
-            try await execLeverage(a, isCross: useCrossMargin && !a.onlyIsolated, leverage: min(max(quickLev, 1), a.maxLeverage))
-            let px = HLFormat.slippagePrice(price, isBuy: long, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
-            let st = try await execOrders([
-                OrderRequest(asset: a, isBuy: long, size: size, limitPx: px, reduceOnly: false, kind: .limit(tif: "Ioc")),
-                OrderRequest(asset: a, isBuy: !long, size: size, limitPx: sl, reduceOnly: true, kind: .trigger(triggerPx: sl, isMarket: true, tpsl: .sl)),
-            ], grouping: "normalTpsl")
-            if case .filled? = st.first {
-                await refreshAccount()
-                await placeTakeProfits(coin: coin, PendingTPs(entryOid: 0, isLong: long, prices: [tp], fractions: [1]))
+            let pos = position
+            let lev = min(max(quickLev, 1), a.maxLeverage)
+            if let pos {
+                if lev > pos.leverage { try await execLeverage(a, isCross: pos.isCross, leverage: lev) }
+            } else {
+                try await execLeverage(a, isCross: useCrossMargin && !a.onlyIsolated, leverage: lev)
             }
+            let px = HLFormat.slippagePrice(price, isBuy: long, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
+            var reqs = [OrderRequest(asset: a, isBuy: long, size: size, limitPx: px, reduceOnly: false, kind: .limit(tif: "Ioc"))]
+            if pos == nil {
+                reqs.append(OrderRequest(asset: a, isBuy: !long, size: size, limitPx: sl, reduceOnly: true, kind: .trigger(triggerPx: sl, isMarket: true, tpsl: .sl)))
+            }
+            // Adding: the existing stop and take-profits grow with the position.
+            var m = managed[coin] ?? ManagedTrade(isLong: long, lastSize: 0)
+            m.isLong = long
+            m.lastSize = abs(pos?.size ?? 0)
+            m.stop = pos == nil ? sl : (existingStopOrder?.displayPx ?? sl)
+            if existingTPOrders.isEmpty { m.tps = PendingTPs(entryOid: 0, isLong: long, prices: [tp], fractions: [1]) }
+            managed[coin] = m
+            _ = try await execOrders(reqs, grouping: pos == nil ? "normalTpsl" : "na")
+            await refreshAccount()
             await refreshHistory()
         } catch {
             toast(error.localizedDescription, .error)

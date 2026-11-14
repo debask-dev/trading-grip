@@ -222,73 +222,127 @@ struct TicketCard: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        let r = state.riskResult
+        let pl = state.plan
         let t = state.ticket
         let tick = state.priceTick
-        Card(title: "Nieuwe order", trailing: AnyView(r.map { SidePill(isLong: $0.isLong) })) {
+        let manual = state.panelMode == .manual
+        let reduce = t?.reduceOnly == true
+        Card(title: title(pl, t), trailing: AnyView(pill(pl, t))) {
             Picker("", selection: Binding(get: { state.ticket?.isMarket ?? false }, set: { state.ticket?.isMarket = $0 })) {
                 Text("Limit").tag(false)
-                Text("Market").tag(true)
+                Text(t.map { $0.entries.count > 1 } == true ? "E1 market" : "Market").tag(true)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
             .demoAnchor("ticket-type")
 
-            // Size: risk → size (risk panel, lock on risk) or size → risk.
+            // Size and leverage
             VStack(spacing: 7) {
-                if state.panelMode == .risk {
-                    ScrubField(label: "Max verlies", value: state.riskPercent, step: 0.05,
+                if !manual {
+                    ScrubField(label: pl?.isAdd == true ? "Max verlies hele trade" : "Max verlies", value: state.riskPercent, step: 0.05,
                                display: { "\(Fmt.number($0, decimals: 2))% · \(state.fmt.usd(state.sizingEquity * $0 / 100, decimals: 2))" },
                                color: Theme.red, range: 0.05...10, locked: t?.lock == .risk, onLock: { state.toggleLock() }) { state.setTicketRisk($0) }
                 }
-                let sizeStep = pow(10, -Double(state.szDecimals))
-                ScrubField(label: "Grootte", value: (t?.lock == .size || state.panelMode == .manual) ? (t?.size ?? r?.size ?? 0) : (r?.size ?? 0),
-                           step: max(sizeStep, (r?.size ?? 0) / 200),
-                           display: { state.fmt.size($0, coin: state.coin, decimals: state.szDecimals) },
-                           range: 0...1e12, locked: state.panelMode == .risk ? (t?.lock == .size) : nil, onLock: { state.toggleLock() }) { state.setTicketSize($0) }
-                if state.panelMode == .manual, let r {
-                    KV("Risico", "\(state.fmt.usd(-r.riskUsd, decimals: 2)) · \(Fmt.number(r.riskPercentActual, decimals: 2))%", color: Theme.red)
+                SizeField(plan: pl)
+                if !reduce {
+                    LeverageField(plan: pl)
                 }
-                ScrubField(label: "Hefboom", value: Double(t?.leverage ?? r?.leverage ?? 1), step: 1,
-                           display: { "\(Int($0))×\(t?.leverage == nil ? " auto" : "")" },
-                           range: 1...Double(state.asset?.maxLeverage ?? 50)) { state.setTicketLeverage(Int($0.rounded())) }
             }
 
             Divider().overlay(Theme.line)
 
-            VStack(spacing: 7) {
-                if t?.isMarket == false {
-                    ScrubField(label: "Entry", value: t?.entry ?? 0, step: tick, display: { Fmt.price($0) }, color: Theme.blue, range: tick...1e12) {
-                        state.ticket?.entry = state.roundToTick($0)
+            // Entries
+            VStack(alignment: .leading, spacing: 7) {
+                let entries = t?.entries ?? []
+                ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
+                    HStack(spacing: 6) {
+                        if t?.isMarket == true && i == 0 {
+                            KV(entries.count > 1 ? "E1" : (reduce ? "Prijs" : "Entry"), "market ≈ " + Fmt.price(state.price), color: Theme.blue)
+                        } else {
+                            ScrubField(label: entries.count > 1 ? "E\(i + 1)" : (reduce ? "Prijs" : "Entry"), value: e.price, step: tick, display: { Fmt.price($0) },
+                                       color: reduce ? Theme.orange : Theme.blue, range: tick...1e12) {
+                                if state.ticket?.entries.indices.contains(i) == true { state.ticket?.entries[i].price = state.roundToTick($0) }
+                            }
+                        }
+                        if entries.count > 1 {
+                            ScrubPct(value: e.pct) { state.setEntryPct(i, $0) }
+                            RemoveButton(help: "Entry weghalen") { state.removeTicketEntry(i) }
+                        }
                     }
-                } else {
-                    KV("Entry", "≈ " + Fmt.price(state.price), color: Theme.blue)
                 }
-                ScrubField(label: "Stop-loss", value: t?.stopLoss ?? 0, step: tick, display: { Fmt.price($0) }, color: Theme.red, range: tick...1e12) {
-                    state.ticket?.stopLoss = state.roundToTick($0)
+                HStack(spacing: 6) {
+                    Button("+ Entry") { state.addTicketEntry() }
+                        .buttonStyle(ChipStyle(active: false))
+                        .disabled(entries.count >= 5)
+                        .help("Gespreid \(reduce ? "verkleinen" : "instappen"): extra limit-order op een andere prijs")
+                    if entries.count > 1 {
+                        Button("Gelijk") { state.applyEntrySplit(state.defaultSplit(entries.count)) }.buttonStyle(ChipStyle(active: false))
+                        if entries.count == 2 { Button("60/40") { state.applyEntrySplit([60, 40]) }.buttonStyle(ChipStyle(active: entries.map(\.pct) == [60, 40])) }
+                        if entries.count == 3 { Button("50/30/20") { state.applyEntrySplit([50, 30, 20]) }.buttonStyle(ChipStyle(active: entries.map(\.pct) == [50, 30, 20])) }
+                    }
                 }
             }
 
-            TPLadder()
+            // Stop-loss
+            if !reduce {
+                if manual {
+                    Toggle(isOn: Binding(get: { state.ticket?.useStopLoss ?? true }, set: { state.ticket?.useStopLoss = $0 })) {
+                        Text(pl?.isAdd == true ? "Stop-loss (hele positie)" : "Stop-loss").font(.system(size: 12))
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                if t?.useStopLoss != false {
+                    ScrubField(label: manual ? "  Prijs" : (pl?.isAdd == true ? "Stop-loss (hele positie)" : "Stop-loss"), value: t?.stopLoss ?? 0, step: tick,
+                               display: { Fmt.price($0) }, color: Theme.red, range: tick...1e12) {
+                        state.ticket?.stopLoss = state.roundToTick($0)
+                    }
+                }
+            }
+
+            // Take-profits
+            if !reduce {
+                if pl?.isAdd == true && (t?.tps.isEmpty ?? true) && !state.existingTPOrders.isEmpty {
+                    ExistingTPsView(plan: pl)
+                } else {
+                    TPLadder(optional: manual)
+                }
+            }
 
             Divider().overlay(Theme.line)
 
-            if let r {
-                VStack(spacing: 6) {
-                    KV("Notional", state.fmt.usd(r.notional))
-                    KV("Marge", state.fmt.usd(r.marginRequired))
-                    KV("Risico tot stop", "\(state.fmt.usd(-r.riskUsd, decimals: 2)) · \(Fmt.number(r.riskPercentActual, decimals: 2))%", color: Theme.red)
-                    KV("Fees (in + stop)", state.fmt.usd(r.estFees, decimals: 2), color: Theme.muted)
-                    if let rr = r.rewardRisk { KV("Risk : reward", "1 : " + Fmt.number(rr, decimals: 1)) }
-                    if let p = r.potentialProfit { KV("Winst alle TP's", state.fmt.signedUsd(p, decimals: 2), color: Theme.green) }
-                    KV("Liquidatie ±", Fmt.price(r.estLiquidationPx), color: Theme.orange)
+            if let pl {
+                if let before = pl.before, !reduce {
+                    BeforeAfterView(before: before, after: pl.after, plan: pl)
                 }
-                ForEach(r.warnings, id: \.self) { w in
+                VStack(spacing: 6) {
+                    if reduce {
+                        KV("Resultaat van dit deel ≈", state.fmt.signedUsd(pl.reducePnl ?? 0, decimals: 2), color: Theme.pnl(pl.reducePnl ?? 0))
+                        KV("Positie na", state.fmt.size(pl.after.size, coin: state.coin, decimals: state.szDecimals))
+                    } else {
+                        if pl.before == nil {
+                            KV("Notional", state.fmt.usd(pl.notional))
+                            KV("Marge", state.fmt.usd(pl.marginRequired))
+                        }
+                        if (t?.entries.count ?? 1) > 1 { KV(pl.isAdd ? "Gem. entry bijkoop" : "Gem. entry als alles vult", Fmt.price(pl.avgEntry), color: Theme.blue) }
+                        if let risk = pl.riskUsd {
+                            KV(pl.isAdd ? "Risico hele trade" : "Risico tot stop", "\(state.fmt.usd(-risk, decimals: 2)) · \(Fmt.number(pl.riskPercentActual ?? 0, decimals: 2))%", color: Theme.red)
+                        } else {
+                            KV("Risico", "geen stop-loss", color: Theme.orange)
+                        }
+                        if let first = pl.riskFirstEntryOnly { KV("Als alleen E1 vult", state.fmt.usd(-first, decimals: 2), color: Theme.red) }
+                        KV("Fees (in\(t?.useStopLoss == false ? "" : " + stop"))", state.fmt.usd(pl.estFees, decimals: 2), color: Theme.muted)
+                        if let rr = pl.rewardRisk { KV("Risk : reward", "1 : " + Fmt.number(rr, decimals: 1)) }
+                        if let p = pl.potentialProfit { KV("Winst alle TP's", state.fmt.signedUsd(p, decimals: 2), color: Theme.green) }
+                        if pl.before == nil { KV("Liquidatie ±", Fmt.price(pl.estLiquidationPx), color: Theme.orange) }
+                    }
+                }
+                ForEach(pl.warnings, id: \.self) { w in
                     Label(w, systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 11)).foregroundStyle(Theme.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
-                Text("Stop-loss moet anders zijn dan de entry.").font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+                Text("Vul een entry in.").font(.system(size: 11.5)).foregroundStyle(Theme.muted)
             }
 
             HStack(spacing: 8) {
@@ -301,12 +355,12 @@ struct TicketCard: View {
                 } label: {
                     HStack {
                         if state.busy { ProgressView().controlSize(.small) }
-                        Text(placeTitle(r))
+                        Text(placeTitle(pl, t))
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(BigButtonStyle(color: (r?.isLong ?? true) ? Theme.green : Theme.red))
-                .disabled(r == nil || state.busy || (r?.size ?? 0) <= 0)
+                .buttonStyle(BigButtonStyle(color: reduce ? Theme.orange : ((t?.isLong ?? true) ? Theme.green : Theme.red)))
+                .disabled(pl == nil || state.busy || (pl?.size ?? 0) <= 0)
                 .demoAnchor("btn-place")
                 .keyboardShortcut(.return, modifiers: .command)
             }
@@ -317,15 +371,183 @@ struct TicketCard: View {
         }
     }
 
-    private func placeTitle(_ r: RiskResult?) -> String {
-        let side = (r?.isLong ?? true) ? "long" : "short"
-        return (state.ticket?.isMarket ?? false) ? "Market \(side)" : "Plaats limit \(side)"
+    private func title(_ pl: Plan?, _ t: Ticket?) -> String {
+        guard let t else { return "Nieuwe order" }
+        if t.reduceOnly { return "Verkleinen · \(state.coin)" }
+        if pl?.isAdd == true { return "Bijkopen · \(state.coin) \(t.isLong ? "long" : "short")" }
+        return "Nieuwe order"
+    }
+
+    private func pill(_ pl: Plan?, _ t: Ticket?) -> some View {
+        Group {
+            if t?.reduceOnly == true {
+                Text("REDUCE").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Theme.orange)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.orange.opacity(0.15)))
+            } else if pl?.isAdd == true {
+                Text("+ BIJ").font(.system(size: 10.5, weight: .bold)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 5).fill(Theme.accent.opacity(0.2)))
+            } else if let t {
+                SidePill(isLong: t.isLong)
+            }
+        }
+    }
+
+    private func placeTitle(_ pl: Plan?, _ t: Ticket?) -> String {
+        guard let t else { return "Plaats" }
+        let side = t.isLong ? "long" : "short"
+        let n = t.entries.count
+        if t.reduceOnly { return t.isMarket && n == 1 ? "Verklein (market)" : "Verklein" }
+        if pl?.isAdd == true { return t.isMarket ? "Koop bij (market)" : (n > 1 ? "Plaats \(n) bijkoop-orders" : "Koop bij") }
+        if n > 1 { return "Plaats \(n) entries" }
+        return t.isMarket ? "Market \(side)" : "Plaats limit \(side)"
+    }
+}
+
+/// Size in coins, or in dollars (manual panel).
+struct SizeField: View {
+    @EnvironmentObject var state: AppState
+    let plan: Plan?
+
+    var body: some View {
+        let t = state.ticket
+        let manual = state.panelMode == .manual
+        let fixed = manual || t?.lock == .size || t?.reduceOnly == true
+        let coins = fixed ? (t?.size ?? plan?.size ?? 0) : (plan?.size ?? 0)
+        let px = max(plan?.avgEntry ?? state.price, 1e-9)
+        let usd = t?.sizeInUsd == true
+        HStack(spacing: 6) {
+            ScrubField(label: t?.reduceOnly == true ? "Verkleinen met" : (plan?.isAdd == true ? "Erbij" : "Grootte"),
+                       value: usd ? coins * px : coins,
+                       step: usd ? max(5, coins * px / 200) : max(pow(10, -Double(state.szDecimals)), coins / 200),
+                       display: { usd ? state.fmt.usd($0) : state.fmt.size($0, coin: state.coin, decimals: state.szDecimals) },
+                       range: 0...1e12,
+                       locked: state.panelMode == .risk ? (t?.lock == .size) : nil, onLock: { state.toggleLock() }) { v in
+                state.setTicketSize(usd ? v / px : v)
+            }
+            if manual {
+                Button(usd ? "$" : state.coin) { state.ticket?.sizeInUsd.toggle() }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 34)
+                    .help("Grootte in \(usd ? state.coin : "dollars") invullen")
+            }
+        }
+        if t?.reduceOnly == true, let pos = state.position {
+            HStack(spacing: 6) {
+                ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { f in
+                    Button("\(Int(f * 100))%") { state.setTicketSize(HLFormat.roundSize(abs(pos.size) * f, szDecimals: state.szDecimals)) }
+                        .buttonStyle(ChipStyle(active: false))
+                }
+            }
+        }
+    }
+}
+
+struct LeverageField: View {
+    @EnvironmentObject var state: AppState
+    let plan: Plan?
+
+    var body: some View {
+        let t = state.ticket
+        let current = state.position?.leverage
+        HStack(spacing: 6) {
+            ScrubField(label: current.map { "Hefboom (nu \($0)×)" } ?? "Hefboom", value: Double(t?.leverage ?? plan?.leverage ?? 1), step: 1,
+                       display: { "\(Int($0))×\(t?.leverage == nil ? " auto" : "")" },
+                       range: 1...Double(state.asset?.maxLeverage ?? 50)) { state.setTicketLeverage(Int($0.rounded())) }
+            if t?.leverage != nil {
+                Button("auto") { state.setTicketLeverage(nil) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .help("Automatisch: wat nodig is, nooit lager dan je huidige hefboom")
+            }
+        }
+    }
+}
+
+struct RemoveButton: View {
+    var help: String
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) { Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim) }
+            .buttonStyle(.plain)
+            .help(help)
+    }
+}
+
+/// Position now → after adding.
+struct BeforeAfterView: View {
+    @EnvironmentObject var state: AppState
+    let before: PositionSnapshot
+    let after: PositionSnapshot
+    let plan: Plan
+
+    var body: some View {
+        let f = state.fmt
+        let d = state.szDecimals
+        Grid(alignment: .trailing, horizontalSpacing: 8, verticalSpacing: 4) {
+            GridRow {
+                Text("").gridColumnAlignment(.leading)
+                Text("NU").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.dim)
+                Text("")
+                Text("NA").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.dim)
+            }
+            row("Grootte", f.size(before.size, coin: "", decimals: d), f.size(after.size, coin: state.coin, decimals: d))
+            row("Gem. entry", Fmt.price(before.avgEntry), Fmt.price(after.avgEntry))
+            row("Break-even", Fmt.price(state.breakEven ?? before.breakEven), Fmt.price(after.breakEven))
+            if let r = after.riskUsd {
+                row("Risico tot stop", before.riskUsd.map { f.usd(-max($0, 0), decimals: 0) } ?? "–", f.usd(-r, decimals: 2), color: Theme.red)
+            }
+            row("Marge", f.usd(before.margin, decimals: 0), f.usd(after.margin, decimals: 0))
+            row("Liquidatie ≈", Fmt.price(state.position?.liquidationPx ?? before.estLiquidationPx), Fmt.price(after.estLiquidationPx), color: Theme.orange)
+        }
+        .font(.system(size: 11.5))
+    }
+
+    private func row(_ k: String, _ a: String, _ b: String, color: Color = Theme.text) -> some View {
+        GridRow {
+            Text(k).foregroundStyle(Theme.muted).gridColumnAlignment(.leading)
+            Text(a).mono(11).foregroundStyle(Theme.muted)
+            Text("→").foregroundStyle(Theme.dim)
+            Text(b).mono(11, .semibold).foregroundStyle(color)
+        }
+    }
+}
+
+/// While adding: the take-profits already on the position, and how big they become.
+struct ExistingTPsView: View {
+    @EnvironmentObject var state: AppState
+    let plan: Plan?
+
+    var body: some View {
+        let pos = state.position
+        let factor = (plan?.after.size ?? 0) / max(abs(pos?.size ?? 1), 1e-12)
+        VStack(alignment: .leading, spacing: 5) {
+            Text("TAKE-PROFITS GROEIEN MEE").font(.system(size: 10, weight: .semibold)).tracking(0.6).foregroundStyle(Theme.muted)
+            ForEach(state.existingTPOrders) { o in
+                HStack {
+                    Text("TP \(Fmt.price(o.displayPx))").mono(11.5).foregroundStyle(Theme.green)
+                    Spacer()
+                    if o.size > 0 {
+                        Text("\(state.fmt.size(o.size, coin: "", decimals: state.szDecimals)) → \(state.fmt.size(o.size * factor, coin: state.coin, decimals: state.szDecimals))").mono(11)
+                    } else {
+                        Text("hele positie").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    }
+                }
+            }
+            Button("Nieuwe TP-ladder in plaats hiervan") { state.addTicketTP() }
+                .buttonStyle(ChipStyle(active: false))
+        }
     }
 }
 
 /// Take-profit ladder: price and share per level, presets, break-even option.
 struct TPLadder: View {
     @EnvironmentObject var state: AppState
+    var optional = false
 
     var body: some View {
         let tps = state.ticket?.tps ?? []
@@ -336,14 +558,8 @@ struct TPLadder: View {
                     ScrubField(label: "TP\(i + 1)", value: tp.price, step: tick, display: { Fmt.price($0) }, color: Theme.green, range: tick...1e12) {
                         if state.ticket?.tps.indices.contains(i) == true { state.ticket?.tps[i].price = state.roundToTick($0) }
                     }
-                    if tps.count > 1 {
-                        ScrubPct(value: tp.pct) { state.setTPPct(i, $0) }
-                        Button { state.removeTicketTP(i) } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Take-profit weghalen")
-                    }
+                    if tps.count > 1 { ScrubPct(value: tp.pct) { state.setTPPct(i, $0) } }
+                    if tps.count > 1 || optional { RemoveButton(help: "Take-profit weghalen") { state.removeTicketTP(i) } }
                 }
             }
             HStack(spacing: 6) {
@@ -351,20 +567,22 @@ struct TPLadder: View {
                     .buttonStyle(ChipStyle(active: false))
                     .disabled(tps.count >= 5)
                 if tps.count > 1 {
-                    Button("Gelijk") { state.applySplitPreset(Array(repeating: (100 / Double(tps.count) / 5).rounded(.down) * 5, count: tps.count)) }
+                    Button("Gelijk") { state.applySplitPreset(state.defaultSplit(tps.count)) }
                         .buttonStyle(ChipStyle(active: false))
                     if tps.count == 2 { Button("70/30") { state.applySplitPreset([70, 30]) }.buttonStyle(ChipStyle(active: tps.map(\.pct) == [70, 30])) }
                     if tps.count == 3 { Button("50/30/20") { state.applySplitPreset([50, 30, 20]) }.buttonStyle(ChipStyle(active: tps.map(\.pct) == [50, 30, 20])) }
                 }
             }
-            if tps.count > 1 {
+            if tps.count > 1 && state.ticket?.useStopLoss != false {
                 Toggle(isOn: Binding(get: { state.ticket?.moveSLToBreakEven ?? false }, set: { state.ticket?.moveSLToBreakEven = $0 })) {
                     Text("Stop naar break-even na TP1").font(.system(size: 11.5))
                 }
                 .toggleStyle(.checkbox)
             }
-            Text("TP's zijn limit-orders (reduce-only). Bij een limit-entry plaatst Grip ze zodra de entry gevuld is.")
-                .font(.system(size: 10)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+            if !tps.isEmpty {
+                Text("TP's zijn limit-orders (reduce-only). Grip plaatst ze zodra er een positie is, en laat ze meegroeien als er meer entries vullen.")
+                    .font(.system(size: 10)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -460,6 +678,14 @@ struct PositionCard: View {
                     if let liq = pos.liquidationPx { KV("Liquidatie", Fmt.price(liq), color: Theme.orange) }
                 }
 
+                HStack(spacing: 6) {
+                    Button("+ Bijkopen") { state.newTicket(long: pos.isLong) }
+                        .buttonStyle(ChipStyle(active: false, large: true))
+                        .help("Extra entry op deze positie. Stop en take-profits groeien mee.")
+                    Button("Verkleinen…") { state.panelMode = .manual; state.newTicket(long: !pos.isLong) }
+                        .buttonStyle(ChipStyle(active: false, large: true))
+                        .help("Limit-order die je positie kleiner maakt (reduce-only)")
+                }
                 Text("DEELS SLUITEN (MARKET)").font(.system(size: 10.5, weight: .semibold)).tracking(0.8).foregroundStyle(Theme.muted)
                 HStack(spacing: 6) {
                     ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { f in
