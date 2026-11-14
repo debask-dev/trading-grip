@@ -1,5 +1,6 @@
 #if os(macOS)
 import SwiftUI
+import AppKit
 import GripCore
 
 struct MainView: View {
@@ -155,6 +156,11 @@ struct TradeScreen: View {
                 ChartHeader()
                 Divider().overlay(Theme.line)
                 ChartView(state: state)
+                    .overlay(alignment: .top) {
+                        if let line = state.selectedLine {
+                            LineToolbar(line: line).padding(.top, 34)
+                        }
+                    }
             }
             Divider().overlay(Theme.line)
             TradePanel()
@@ -201,6 +207,11 @@ struct ChartHeader: View {
                     state.tool = state.tool == .trendline ? .cursor : .trendline
                 }
                 .demoAnchor("tool-trend")
+                ToolButton(icon: NSImage(systemSymbolName: "magnet", accessibilityDescription: nil) != nil ? "magnet" : "scope",
+                           active: state.magnet, help: "Magneet: snap op open/high/low/close van candles (⌘ zet tijdelijk om)") {
+                    state.magnet.toggle()
+                }
+                .demoAnchor("tool-magnet")
                 if !state.coinTrendlines.isEmpty {
                     Menu {
                         Button("Wis alle trendlijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }
@@ -219,10 +230,16 @@ struct ChartHeader: View {
                     .foregroundStyle(Theme.orange)
                     .lineLimit(1)
             } else if state.selectedTrendline != nil {
-                Text("Sleep de uiteinden om aan te passen · ⌫ verwijdert · rechtsklik voor opties")
+                Text("Sleep de uiteinden om aan te passen · ⌫ verwijdert")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.muted)
                     .lineLimit(1)
+            } else {
+                Text("⇧-klik = meten")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.dim)
+                    .lineLimit(1)
+                    .help("Houd ⇧ ingedrukt en klik in de chart, beweeg de muis en klik nog eens: % omhoog/omlaag, aantal candles en tijd.")
             }
 
             Spacer()

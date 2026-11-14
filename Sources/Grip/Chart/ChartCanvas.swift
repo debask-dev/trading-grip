@@ -2,17 +2,20 @@
 import AppKit
 import GripCore
 
-/// Custom-drawn candlestick chart with draggable order lines, a drag-to-close handle and trendlines.
+/// Custom-drawn candlestick chart with draggable order lines, a drag-to-close handle, trendlines and a measure tool.
 ///
-/// Mouse:   drag empty area = pan · drag price axis = scale · double-click axis = auto-scale
-///          scroll vertical = zoom · scroll horizontal = pan · pinch = zoom
+/// Mouse:   drag chart = pan (with momentum) · drag price axis = scale price · drag time axis = zoom time
+///          double-click an axis = reset · "A" button = auto-scale price
+///          scroll vertical / pinch = zoom (max 10% per step, anchored under the cursor) · scroll horizontal = pan
 /// Lines:   drag any order/TP/SL line · drag the ✕ on the position line to place a partial close
-/// Drawing: trendline tool → click-drag (or click, click). Hold ⌘ to snap to candle open/high/low/close.
-///          Click a line to select, drag its ends or body, ⌫ to delete, right-click for options.
+/// Drawing: trendline tool → click-drag (or click, click). Snap to candle open/high/low/close with the magnet,
+///          or temporarily by holding ⌘. Click a line to select it, drag its ends or body, ⌫ to delete.
+/// Measure: ⇧ + click, move, click (or ⇧ + drag). Esc or a click clears it.
 final class ChartCanvas: NSView {
     // MARK: Inputs
     var candles: [Candle] = []
     var timeframe: Timeframe = .m15
+    var coin = ""
     var lastPrice: Double = 0
     var lines: [ChartLine] = []
     var trendlines: [Trendline] = []
@@ -20,6 +23,9 @@ final class ChartCanvas: NSView {
     var tool: ChartTool = .cursor { didSet { if tool != .trendline { pendingTrendStart = nil; trendDraft = nil } } }
     var hasPosition = false
     var isLoading = false
+    var magnet = false
+    var style: ChartStyle = .grip { didSet { if oldValue != style { colorCache = [:] } } }
+    var newLineAppearance = LineAppearance()
     var resetKey: String = "" { didSet { if oldValue != resetKey { resetView() } } }
 
     // MARK: Callbacks
@@ -38,29 +44,41 @@ final class ChartCanvas: NSView {
     private let axisWidth: CGFloat = 78
     private let timeHeight: CGFloat = 26
     private var plot: NSRect { NSRect(x: 0, y: 0, width: max(10, bounds.width - axisWidth), height: max(10, bounds.height - timeHeight)) }
+    private var autoButtonRect: NSRect { NSRect(x: plot.maxX + (axisWidth - 26) / 2, y: plot.maxY + 3, width: 26, height: timeHeight - 6) }
+    private var pixelRatio: CGFloat { window?.backingScaleFactor ?? 2 }
 
     // MARK: Viewport
-    private var spacing: CGFloat = 9
-    private var rightOffset: CGFloat = 10
+    private var vp = ChartViewport()
     private var autoScale = true
     private var manualRange: (lo: Double, hi: Double) = (0, 1)
     private var range: (lo: Double, hi: Double) = (0, 1)
+    private var kinetic = KineticScroll()
+    private var kineticTimer: Timer?
+    private var clockTimer: Timer?
 
     // MARK: Interaction
     private enum Hover: Equatable {
-        case line(LineID), closeHandle, trendline(UUID), endpoint(UUID, Bool), axis
+        case line(LineID), closeHandle, trendline(UUID), endpoint(UUID, Bool), priceAxis, timeAxis, autoButton
     }
     private enum Drag {
         case none
-        case pan(startX: CGFloat, startOffset: CGFloat, startY: CGFloat, startRange: (lo: Double, hi: Double))
-        case axis(startY: CGFloat, startRange: (lo: Double, hi: Double))
+        case pan(startX: CGFloat, startOffset: Double, startY: CGFloat, startRange: (lo: Double, hi: Double))
+        case priceAxis(startY: CGFloat, startRange: (lo: Double, hi: Double))
+        case timeAxis(startX: CGFloat, startSpacing: Double)
         case line(LineID)
         case close
         case trendNew(ChartPoint)
         case endpoint(UUID, isA: Bool)
         case trendMove(Trendline, anchor: ChartPoint)
+        case measure(ChartPoint, startScreen: CGPoint)
+    }
+    private enum Measure {
+        case none
+        case active(ChartPoint)                 // following the mouse
+        case fixed(ChartPoint, ChartPoint)
     }
     private var drag: Drag = .none
+    private var measure: Measure = .none
     private var dragPrice: Double?
     private var closeGhost: Double?
     private var mouse: CGPoint?
@@ -72,6 +90,10 @@ final class ChartCanvas: NSView {
     private var labelRects: [LineID: NSRect] = [:]
     private var closeHandleRect: NSRect?
     private var trackingArea: NSTrackingArea?
+    private var colorCache: [String: NSColor] = [:]
+
+    /// Snapping is on when the magnet is on, or temporarily while holding ⌘ (⌘ inverts the magnet).
+    private var snapActive: Bool { magnet != commandDown }
 
     private var draftStart: ChartPoint? {
         if let p = pendingTrendStart { return p }
@@ -103,11 +125,23 @@ final class ChartCanvas: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        clockTimer?.invalidate()
+        clockTimer = nil
+        guard window != nil else { return }
+        // Redraw once a second for the candle countdown.
+        clockTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.needsDisplay = true }
+        }
+    }
+
     func resetView() {
-        spacing = 9
-        rightOffset = 10
+        stopKinetic()
+        vp.reset()
         autoScale = true
         drag = .none
+        measure = .none
         pendingTrendStart = nil
         trendDraft = nil
         needsDisplay = true
@@ -115,13 +149,17 @@ final class ChartCanvas: NSView {
 
     // MARK: Coordinates
 
-    private func x(index i: Double) -> CGFloat {
-        plot.maxX - (CGFloat(Double(candles.count - 1) - i) + rightOffset) * spacing - spacing / 2
+    private func syncViewport() {
+        vp.width = Double(plot.width)
+        vp.barCount = candles.count
+        vp.clamp()
     }
 
-    private func index(x: CGFloat) -> Double {
-        Double(candles.count - 1) + Double(rightOffset) - Double((plot.maxX - spacing / 2 - x) / spacing)
-    }
+    private var spacing: CGFloat { CGFloat(vp.barSpacing) }
+
+    private func x(index i: Double) -> CGFloat { plot.minX + CGFloat(vp.x(index: i)) }
+
+    private func index(x: CGFloat) -> Double { vp.index(x: Double(x - plot.minX)) }
 
     private func index(time t: Int64) -> Double {
         guard let first = candles.first, let last = candles.last else { return 0 }
@@ -160,14 +198,10 @@ final class ChartCanvas: NSView {
         return r.hi - Double((yy - plot.minY - 10) / h) * (r.hi - r.lo)
     }
 
-    private func visibleIndices() -> ClosedRange<Int>? {
-        guard !candles.isEmpty else { return nil }
-        let a = max(0, Int(index(x: plot.minX).rounded(.down)))
-        let b = min(candles.count - 1, Int(index(x: plot.maxX).rounded(.up)))
-        return a <= b ? a...b : nil
-    }
+    private func visibleIndices() -> ClosedRange<Int>? { vp.visibleRange }
 
     private func computeRange() {
+        syncViewport()
         if !autoScale { range = manualRange; return }
         var lo = Double.greatestFiniteMagnitude, hi = -Double.greatestFiniteMagnitude
         if let vis = visibleIndices() {
@@ -192,6 +226,29 @@ final class ChartCanvas: NSView {
 
     private func screen(_ cp: ChartPoint) -> CGPoint { CGPoint(x: x(index: index(time: cp.time)), y: y(cp.price)) }
 
+    private func align(_ v: CGFloat) -> CGFloat { (v * pixelRatio).rounded() / pixelRatio }
+
+    private func color(_ hex: String) -> NSColor {
+        if let c = colorCache[hex] { return c }
+        let rgba = RGBA(hex: hex) ?? RGBA(r: 1, g: 1, b: 1)
+        let c = NSColor(srgbRed: rgba.r, green: rgba.g, blue: rgba.b, alpha: rgba.a)
+        colorCache[hex] = c
+        return c
+    }
+
+    /// The visible segment of a trendline, including extensions to the chart edges.
+    private func segment(_ l: Trendline) -> (CGPoint, CGPoint) {
+        var a = screen(l.a), b = screen(l.b)
+        guard abs(b.x - a.x) > 0.01 else { return (a, b) }
+        let slope = (b.y - a.y) / (b.x - a.x)
+        let (left, right) = a.x <= b.x ? (a, b) : (b, a)
+        var l2 = left, r2 = right
+        if l.extendLeft { l2 = CGPoint(x: plot.minX, y: left.y + slope * (plot.minX - left.x)) }
+        if l.extendRight { r2 = CGPoint(x: plot.maxX, y: right.y + slope * (plot.maxX - right.x)) }
+        a = l2; b = r2
+        return (a, b)
+    }
+
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
@@ -204,14 +261,17 @@ final class ChartCanvas: NSView {
         drawGridAndAxes()
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: plot).addClip()
-        drawVolume()
+        if style.showVolume { drawVolume() }
         drawCandles()
         drawTrendlines()
+        drawMeasure()
         NSGraphicsContext.restoreGraphicsState()
 
         drawLastPrice()
         drawOrderLines()
         drawCrosshair()
+        drawLegend()
+        drawAutoButton()
 
         if candles.isEmpty {
             text(isLoading ? "Koersen laden…" : "Geen koersdata", at: CGPoint(x: plot.midX, y: plot.midY), font: .systemFont(ofSize: 14), color: Palette.dim, align: .center)
@@ -230,10 +290,12 @@ final class ChartCanvas: NSView {
         var p = (range.lo / step).rounded(.up) * step
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .regular)
         while p <= range.hi {
-            let yy = y(p).rounded() + 0.5
+            let yy = align(y(p)) + 0.5 / pixelRatio
             if yy > plot.minY + 4 && yy < plot.maxY - 4 {
-                Palette.grid.setStroke()
-                hline(yy, from: plot.minX, to: plot.maxX, width: 1)
+                if style.showGrid {
+                    Palette.grid.setStroke()
+                    hline(yy, from: plot.minX, to: plot.maxX, width: 1)
+                }
                 text(Fmt.price(p), at: CGPoint(x: plot.maxX + 9, y: yy), font: font, color: Palette.dim, align: .left)
             }
             p += step
@@ -263,12 +325,14 @@ final class ChartCanvas: NSView {
                 timeFormatter.dateFormat = timeframe == .w1 ? "d MMM ''yy" : "d MMM"
             }
             lastDay = day
-            let xx = x(index: Double(i)).rounded() + 0.5
-            Palette.grid.setStroke()
-            let gl = NSBezierPath()
-            gl.move(to: CGPoint(x: xx, y: plot.minY)); gl.line(to: CGPoint(x: xx, y: plot.maxY))
-            gl.lineWidth = 1
-            gl.stroke()
+            let xx = align(x(index: Double(i))) + 0.5 / pixelRatio
+            if style.showGrid {
+                Palette.grid.setStroke()
+                let gl = NSBezierPath()
+                gl.move(to: CGPoint(x: xx, y: plot.minY)); gl.line(to: CGPoint(x: xx, y: plot.maxY))
+                gl.lineWidth = 1
+                gl.stroke()
+            }
             text(timeFormatter.string(from: date), at: CGPoint(x: xx, y: plot.maxY + timeHeight / 2), font: font, color: Palette.dim, align: .center)
         }
     }
@@ -278,65 +342,71 @@ final class ChartCanvas: NSView {
         let maxVol = vis.map { candles[$0].volume }.max() ?? 0
         guard maxVol > 0 else { return }
         let h = plot.height * 0.16
-        let w = max(1, spacing * 0.7)
+        let w = CGFloat(ChartMath.candleBodyWidth(spacing: Double(spacing), pixelRatio: Double(pixelRatio)))
         for i in vis {
             let c = candles[i]
-            let vh = CGFloat(c.volume / maxVol) * h
-            let color = c.close >= c.open ? Palette.green : Palette.red
-            color.withAlphaComponent(0.16).setFill()
-            NSRect(x: x(index: Double(i)) - w / 2, y: plot.maxY - vh, width: w, height: vh).fill()
+            let vh = align(CGFloat(c.volume / maxVol) * h)
+            color(c.close >= c.open ? style.upBody : style.downBody).withAlphaComponent(0.18).setFill()
+            NSRect(x: align(x(index: Double(i)) - w / 2), y: plot.maxY - vh, width: w, height: vh).fill()
         }
     }
 
     private func drawCandles() {
         guard let vis = visibleIndices() else { return }
-        let w = max(1, (spacing * 0.72).rounded())
+        let pr = pixelRatio
+        let bodyW = CGFloat(ChartMath.candleBodyWidth(spacing: Double(spacing), pixelRatio: Double(pr)))
+        let wickW = bodyW >= 3 ? max(1, pr.rounded(.down)) / pr : 1 / pr
+        let thin = bodyW < 2.5            // too narrow for borders/hollow bodies
         for i in vis {
             let c = candles[i]
             let up = c.close >= c.open
-            let color = up ? Palette.green : Palette.red
-            let cx = x(index: Double(i)).rounded() + 0.5
-            color.setStroke()
-            let wick = NSBezierPath()
-            wick.move(to: CGPoint(x: cx, y: y(c.high))); wick.line(to: CGPoint(x: cx, y: y(c.low)))
-            wick.lineWidth = 1
-            wick.stroke()
-            let top = y(max(c.open, c.close)), bot = y(min(c.open, c.close))
-            color.setFill()
-            NSRect(x: cx - w / 2, y: top, width: w, height: max(1, bot - top)).fill()
+            let left = align(x(index: Double(i)) - bodyW / 2)
+            let top = align(y(max(c.open, c.close)))
+            let bottom = max(top + 1 / pr, align(y(min(c.open, c.close))))
+            let body = NSRect(x: left, y: top, width: bodyW, height: bottom - top)
+            let wickX = left + ((bodyW - wickW) / 2 * pr).rounded(.down) / pr
+
+            if style.showWicks {
+                color(up ? style.upWick : style.downWick).setFill()
+                let hi = align(y(c.high)), lo = align(y(c.low))
+                NSRect(x: wickX, y: hi, width: wickW, height: max(0, top - hi)).fill()
+                NSRect(x: wickX, y: bottom, width: wickW, height: max(0, lo - bottom)).fill()
+            }
+            let hollow = up && style.hollowUp && !thin
+            if !hollow {
+                color(up ? style.upBody : style.downBody).setFill()
+                body.fill()
+            }
+            if (style.showBorders || hollow) && !thin {
+                color(up ? style.upBorder : style.downBorder).setFill()
+                body.frame(withWidth: 1 / pr * (hollow ? 2 : 1), using: .sourceOver)
+            }
         }
     }
 
-    private func color(_ c: DrawingColor) -> NSColor {
-        switch c {
-        case .yellow: return Palette.yellow
-        case .blue: return Palette.blue
-        case .purple: return Palette.accent
-        case .white: return Palette.text
-        case .green: return Palette.green
-        case .red: return Palette.red
+    private func dashPattern(_ dash: LineDash, width: CGFloat) -> [CGFloat]? {
+        switch dash {
+        case .solid: return nil
+        case .dashed: return [6 + width * 2, 4 + width]
+        case .dotted: return [0.01, width * 2.6]
         }
     }
 
     private func drawTrendlines() {
         for l in trendlines {
-            let a = screen(l.a), b0 = screen(l.b)
-            var b = b0
-            if l.extendRight, abs(b0.x - a.x) > 0.01 {
-                let slope = (b0.y - a.y) / (b0.x - a.x)
-                let ex = b0.x >= a.x ? plot.maxX : plot.minX
-                b = CGPoint(x: ex, y: a.y + slope * (ex - a.x))
-            }
+            let (a, b) = segment(l)
             let selected = l.id == selectedTrendline
             let hovered = isHovering(trendline: l.id)
             let path = NSBezierPath()
             path.move(to: a); path.line(to: b)
-            path.lineWidth = selected || hovered ? 2.2 : 1.6
+            let w = CGFloat(l.width) + (selected || hovered ? 0.6 : 0)
+            path.lineWidth = w
             path.lineCapStyle = .round
+            if let d = dashPattern(l.dash, width: w) { path.setLineDash(d, count: d.count, phase: 0) }
             color(l.color).setStroke()
             path.stroke()
             if selected || hovered {
-                for p in [a, b0] {
+                for p in [screen(l.a), screen(l.b)] {
                     let r = NSRect(x: p.x - 4.5, y: p.y - 4.5, width: 9, height: 9)
                     Palette.chartBg.setFill(); NSBezierPath(ovalIn: r).fill()
                     color(l.color).setStroke()
@@ -346,12 +416,15 @@ final class ChartCanvas: NSView {
         }
         // Line being drawn
         if let start = draftStart,
-           let end = trendDraft ?? mouse.map({ chartPoint(at: $0, snap: commandDown) }) {
+           let end = trendDraft ?? mouse.map({ chartPoint(at: $0, snap: snapActive) }) {
+            let draft = Trendline(coin: coin, a: start, b: end, appearance: newLineAppearance)
+            let (a, b) = segment(draft)
             let path = NSBezierPath()
-            path.move(to: screen(start)); path.line(to: screen(end))
-            path.lineWidth = 1.8
+            path.move(to: a); path.line(to: b)
+            path.lineWidth = CGFloat(newLineAppearance.width)
+            path.lineCapStyle = .round
             path.setLineDash([5, 4], count: 2, phase: 0)
-            Palette.yellow.setStroke()
+            color(newLineAppearance.color).setStroke()
             path.stroke()
         }
         // Snap marker
@@ -365,15 +438,78 @@ final class ChartCanvas: NSView {
         }
     }
 
+    private func drawMeasure() {
+        let pair: (ChartPoint, ChartPoint)?
+        switch measure {
+        case .none: pair = nil
+        case .active(let a): pair = mouse.map { (a, chartPoint(at: $0, snap: snapActive)) }
+        case .fixed(let a, let b): pair = (a, b)
+        }
+        guard let (a, b) = pair else { return }
+        let r = ChartMath.measure(from: a, to: b, candles: candles, timeframe: timeframe)
+        let pa = screen(a), pb = screen(b)
+        let up = r.priceChange >= 0
+        let col = up ? Palette.blue : Palette.red
+        let rect = NSRect(x: min(pa.x, pb.x), y: min(pa.y, pb.y), width: abs(pb.x - pa.x), height: abs(pb.y - pa.y))
+        col.withAlphaComponent(0.14).setFill()
+        rect.fill()
+        col.withAlphaComponent(0.7).setStroke()
+        // Arrows through the middle
+        let midX = rect.midX, midY = rect.midY
+        let arrows = NSBezierPath()
+        arrows.move(to: CGPoint(x: midX, y: pa.y)); arrows.line(to: CGPoint(x: midX, y: pb.y))
+        arrows.move(to: CGPoint(x: pa.x, y: midY)); arrows.line(to: CGPoint(x: pb.x, y: midY))
+        let tipDir: CGFloat = pb.y < pa.y ? 1 : -1
+        arrows.move(to: CGPoint(x: midX - 5, y: pb.y + 6 * tipDir)); arrows.line(to: CGPoint(x: midX, y: pb.y)); arrows.line(to: CGPoint(x: midX + 5, y: pb.y + 6 * tipDir))
+        let tipH: CGFloat = pb.x > pa.x ? -1 : 1
+        arrows.move(to: CGPoint(x: pb.x + 6 * tipH, y: midY - 5)); arrows.line(to: CGPoint(x: pb.x, y: midY)); arrows.line(to: CGPoint(x: pb.x + 6 * tipH, y: midY + 5))
+        arrows.lineWidth = 1.4
+        arrows.stroke()
+
+        // Label box under (or above, when measuring down) the rectangle
+        let sign = up ? "+" : "−"
+        let line1 = "\(sign)\(Fmt.price(abs(r.priceChange)))  (\(Fmt.percent(r.percent)))"
+        let line2 = "\(abs(r.bars)) candles · \(ChartMath.durationText(ms: r.durationMs))"
+        let line3 = r.volume > 0 ? "Vol \(compact(r.volume))" : ""
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .semibold)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        let w = [line1, line2, line3].map { ($0 as NSString).size(withAttributes: attrs).width }.max()! + 20
+        let h: CGFloat = line3.isEmpty ? 40 : 56
+        var box = NSRect(x: midX - w / 2, y: up ? rect.minY - h - 8 : rect.maxY + 8, width: w, height: h)
+        box.origin.x = min(max(box.minX, plot.minX + 4), plot.maxX - w - 4)
+        box.origin.y = min(max(box.minY, plot.minY + 4), plot.maxY - h - 4)
+        col.setFill()
+        NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6).fill()
+        text(line1, at: CGPoint(x: box.midX, y: box.minY + 12), font: font, color: .white, align: .center)
+        text(line2, at: CGPoint(x: box.midX, y: box.minY + 28), font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), color: .white, align: .center)
+        if !line3.isEmpty { text(line3, at: CGPoint(x: box.midX, y: box.minY + 44), font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular), color: .white.withAlphaComponent(0.85), align: .center) }
+    }
+
+    private func compact(_ v: Double) -> String {
+        let a = abs(v)
+        if a >= 1e9 { return Fmt.number(v / 1e9, decimals: 2) + "B" }
+        if a >= 1e6 { return Fmt.number(v / 1e6, decimals: 2) + "M" }
+        if a >= 1e3 { return Fmt.number(v / 1e3, decimals: 1) + "K" }
+        return Fmt.number(v, decimals: a < 10 ? 2 : 0)
+    }
+
     private func drawLastPrice() {
         guard lastPrice > 0 else { return }
-        let yy = y(lastPrice).rounded() + 0.5
+        let yy = align(y(lastPrice)) + 0.5 / pixelRatio
         guard yy >= plot.minY, yy <= plot.maxY else { return }
         let up = (candles.last.map { $0.close >= $0.open }) ?? true
-        let col = up ? Palette.green : Palette.red
+        let col = color(up ? style.upBody : style.downBody)
         col.withAlphaComponent(0.55).setStroke()
         hline(yy, from: plot.minX, to: plot.maxX, width: 1, dash: [2, 3])
-        axisTag(lastPrice, at: yy, bg: col, fg: Palette.bg)
+        // Price label with the countdown to the next candle underneath (like TradingView)
+        let r = NSRect(x: plot.maxX + 3, y: yy - 10, width: axisWidth - 7, height: candles.isEmpty ? 20 : 34)
+        col.setFill()
+        NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+        text(Fmt.price(lastPrice), at: CGPoint(x: r.minX + 6, y: yy), font: .monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold), color: Palette.bg, align: .left)
+        if let last = candles.last {
+            let left = ChartMath.countdown(lastCandleOpen: last.time, timeframe: timeframe, nowMs: Int64(Date().timeIntervalSince1970 * 1000))
+            text(left, at: CGPoint(x: r.minX + 6, y: yy + 14), font: .monospacedDigitSystemFont(ofSize: 10, weight: .medium), color: Palette.bg.withAlphaComponent(0.75), align: .left)
+        }
     }
 
     private func drawOrderLines() {
@@ -382,7 +518,7 @@ final class ChartCanvas: NSView {
             let px = isDragging ? (dragPrice ?? line.price) : line.price
             let rawY = y(px)
             let offscreen = rawY < plot.minY + 12 || rawY > plot.maxY - 12
-            let yy = min(max(rawY, plot.minY + 12), plot.maxY - 12).rounded() + 0.5
+            let yy = align(min(max(rawY, plot.minY + 12), plot.maxY - 12)) + 0.5 / pixelRatio
             let hot = isDragging || hover == .line(line.id)
 
             if !offscreen {
@@ -431,7 +567,7 @@ final class ChartCanvas: NSView {
 
         // Ghost line while dragging the close handle
         if let g = closeGhost {
-            let yy = y(g).rounded() + 0.5
+            let yy = align(y(g)) + 0.5 / pixelRatio
             Palette.orange.setStroke()
             hline(yy, from: plot.minX, to: plot.maxX, width: 1.6, dash: [4, 3])
             axisTag(g, at: yy, bg: Palette.orange, fg: Palette.bg)
@@ -447,22 +583,70 @@ final class ChartCanvas: NSView {
     }
 
     private func drawCrosshair() {
-        guard let m = mouse, plot.contains(m), case .none = drag else { return }
+        guard let m = mouse, plot.contains(m) else { return }
+        switch drag {
+        case .none, .measure: break
+        default: return
+        }
         Palette.muted.withAlphaComponent(0.45).setStroke()
-        hline(m.y.rounded() + 0.5, from: plot.minX, to: plot.maxX, width: 1, dash: [3, 3])
+        hline(align(m.y) + 0.5 / pixelRatio, from: plot.minX, to: plot.maxX, width: 1, dash: [3, 3])
+        // The vertical line sits on the hovered candle, like TradingView.
+        let idx = candles.isEmpty ? index(x: m.x) : min(max(index(x: m.x).rounded(), 0), Double(candles.count - 1))
+        let cx = align(candles.isEmpty ? m.x : x(index: idx)) + 0.5 / pixelRatio
         let v = NSBezierPath()
-        v.move(to: CGPoint(x: m.x.rounded() + 0.5, y: plot.minY)); v.line(to: CGPoint(x: m.x.rounded() + 0.5, y: plot.maxY))
+        v.move(to: CGPoint(x: cx, y: plot.minY)); v.line(to: CGPoint(x: cx, y: plot.maxY))
         v.lineWidth = 1; v.setLineDash([3, 3], count: 2, phase: 0); v.stroke()
         axisTag(price(y: m.y), at: m.y, bg: Palette.card, fg: Palette.text)
         guard !candles.isEmpty else { return }
-        let t = time(index: index(x: m.x).rounded())
+        let t = time(index: idx)
         timeFormatter.dateFormat = timeframe.milliseconds < 86_400_000 ? "EEE d MMM HH:mm" : "EEE d MMM yyyy"
         let s = timeFormatter.string(from: Date(timeIntervalSince1970: Double(t) / 1000))
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         let w = (s as NSString).size(withAttributes: [.font: font]).width + 14
-        let r = NSRect(x: m.x - w / 2, y: plot.maxY + 3, width: w, height: timeHeight - 6)
+        let r = NSRect(x: min(max(cx - w / 2, plot.minX), plot.maxX - w), y: plot.maxY + 3, width: w, height: timeHeight - 6)
         Palette.card.setFill(); NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
-        text(s, at: CGPoint(x: m.x, y: r.midY), font: font, color: Palette.text, align: .center)
+        text(s, at: CGPoint(x: r.midX, y: r.midY), font: font, color: Palette.text, align: .center)
+    }
+
+    /// OHLC legend in the top-left corner: the hovered candle, or the newest one.
+    private func drawLegend() {
+        guard !candles.isEmpty else { return }
+        var i = candles.count - 1
+        if let m = mouse, plot.contains(m) { i = Int(min(max(index(x: m.x).rounded(), 0), Double(candles.count - 1))) }
+        let c = candles[i]
+        let up = c.close >= c.open
+        let valueColor = color(up ? style.upBody : style.downBody)
+        let change = c.open != 0 ? (c.close - c.open) / c.open : 0
+        let title = NSFont.systemFont(ofSize: 12.5, weight: .semibold)
+        let key = NSFont.systemFont(ofSize: 12, weight: .regular)
+        let num = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+
+        var penX = plot.minX + 12
+        let yy: CGFloat = 16
+        func put(_ s: String, _ font: NSFont, _ col: NSColor, gap: CGFloat) {
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: col]
+            let size = (s as NSString).size(withAttributes: attrs)
+            (s as NSString).draw(at: CGPoint(x: penX, y: yy - size.height / 2), withAttributes: attrs)
+            penX += size.width + gap
+        }
+        put("\(coin) · \(timeframe.label)", title, Palette.text, gap: 14)
+        for (k, v) in [("O", c.open), ("H", c.high), ("L", c.low), ("C", c.close)] {
+            put(k, key, Palette.muted, gap: 3)
+            put(Fmt.price(v), num, valueColor, gap: 10)
+        }
+        put(Fmt.percent(change), num, valueColor, gap: 12)
+        if c.volume > 0 {
+            put("Vol", key, Palette.muted, gap: 3)
+            put(compact(c.volume), num, Palette.text, gap: 0)
+        }
+    }
+
+    private func drawAutoButton() {
+        let r = autoButtonRect
+        let hot = hover == .autoButton
+        (autoScale ? Palette.accent.withAlphaComponent(0.85) : (hot ? Palette.card : Palette.panel)).setFill()
+        NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+        text("A", at: CGPoint(x: r.midX, y: r.midY), font: .systemFont(ofSize: 11, weight: .bold), color: autoScale ? .white : Palette.muted, align: .center)
     }
 
     // MARK: Drawing helpers
@@ -507,7 +691,9 @@ final class ChartCanvas: NSView {
     }
 
     private func hitTarget(_ p: CGPoint) -> Hover? {
-        if p.x > plot.maxX && p.y < plot.maxY { return .axis }
+        if autoButtonRect.insetBy(dx: -2, dy: -2).contains(p) { return .autoButton }
+        if p.x > plot.maxX && p.y < plot.maxY { return .priceAxis }
+        if p.y > plot.maxY && p.x < plot.maxX { return .timeAxis }
         if let r = closeHandleRect, r.insetBy(dx: -4, dy: -4).contains(p) { return .closeHandle }
         for (id, r) in labelRects where r.insetBy(dx: -2, dy: -3).contains(p) { return .line(id) }
         // Trendline endpoints (selected first), then bodies
@@ -523,13 +709,8 @@ final class ChartCanvas: NSView {
         }
         if let b = bestLine { return .line(b.0) }
         for l in trendlines {
-            var b = screen(l.b)
-            let a = screen(l.a)
-            if l.extendRight, abs(b.x - a.x) > 0.01 {
-                let ex = b.x >= a.x ? plot.maxX : plot.minX
-                b = CGPoint(x: ex, y: a.y + (b.y - a.y) / (b.x - a.x) * (ex - a.x))
-            }
-            if distance(p, toSegment: a, b) < 5 { return .trendline(l.id) }
+            let (a, b) = segment(l)
+            if distance(p, toSegment: a, b) < max(5, CGFloat(l.width) + 3) { return .trendline(l.id) }
         }
         return nil
     }
@@ -547,23 +728,23 @@ final class ChartCanvas: NSView {
     private func location(_ e: NSEvent) -> CGPoint { convert(e.locationInWindow, from: nil) }
 
     private func updateSnapMarker() {
-        guard commandDown, let m = mouse, plot.contains(m) else { snapMarker = nil; return }
-        let drawing = tool == .trendline || pendingTrendStart != nil
-        var editing = false
+        guard snapActive, let m = mouse, plot.contains(m) else { snapMarker = nil; return }
+        var using = tool == .trendline || pendingTrendStart != nil
         switch drag {
-        case .trendNew, .endpoint: editing = true
+        case .trendNew, .endpoint, .measure: using = true
         default: break
         }
-        snapMarker = (drawing || editing) ? Snap.snap(time: time(index: index(x: m.x)), price: price(y: m.y), candles: candles, timeframe: timeframe) : nil
+        if case .active = measure { using = true }
+        snapMarker = using ? Snap.snap(time: time(index: index(x: m.x)), price: price(y: m.y), candles: candles, timeframe: timeframe) : nil
     }
 
     private func updateCursor() {
         if tool == .trendline { NSCursor.crosshair.set(); return }
         switch hover {
         case .line?, .closeHandle?: NSCursor.openHand.set()
-        case .endpoint?: NSCursor.pointingHand.set()
-        case .trendline?: NSCursor.pointingHand.set()
-        case .axis?: NSCursor.resizeUpDown.set()
+        case .endpoint?, .trendline?, .autoButton?: NSCursor.pointingHand.set()
+        case .priceAxis?: NSCursor.resizeUpDown.set()
+        case .timeAxis?: NSCursor.resizeLeftRight.set()
         case nil: NSCursor.crosshair.set()
         }
     }
@@ -593,20 +774,43 @@ final class ChartCanvas: NSView {
 
     override func mouseDown(with e: NSEvent) {
         window?.makeFirstResponder(self)
+        stopKinetic()
         let p = location(e)
         mouse = p
         commandDown = e.modifierFlags.contains(.command)
         computeRange()
 
-        if e.clickCount == 2 && p.x > plot.maxX {
-            autoScale = true
-            needsDisplay = true
-            return
+        if e.clickCount == 2 {
+            if p.x > plot.maxX && p.y < plot.maxY { autoScale = true; needsDisplay = true; return }
+            if p.y > plot.maxY && p.x < plot.maxX { vp.reset(); needsDisplay = true; return }
+        }
+
+        // Measuring: ⇧ + click starts, the next click ends, a further click clears.
+        if tool == .cursor && plot.contains(p) {
+            let shift = e.modifierFlags.contains(.shift)
+            switch measure {
+            case .active(let a):
+                measure = .fixed(a, chartPoint(at: p, snap: snapActive))
+                needsDisplay = true
+                return
+            case .fixed:
+                measure = .none
+                if !shift { needsDisplay = true }
+            case .none:
+                break
+            }
+            if shift {
+                let pt = chartPoint(at: p, snap: snapActive)
+                measure = .active(pt)
+                drag = .measure(pt, startScreen: p)
+                needsDisplay = true
+                return
+            }
         }
 
         if tool == .trendline {
             guard plot.contains(p) else { return }
-            let pt = chartPoint(at: p, snap: commandDown)
+            let pt = chartPoint(at: p, snap: snapActive)
             if let start = pendingTrendStart {
                 onTrendlineCreate?(start, pt)
                 pendingTrendStart = nil
@@ -621,6 +825,9 @@ final class ChartCanvas: NSView {
         }
 
         switch hitTarget(p) {
+        case .autoButton?:
+            autoScale.toggle()
+            if !autoScale { manualRange = range }
         case .closeHandle?:
             drag = .close
             closeGhost = lines.first { $0.id == .position }?.price
@@ -635,11 +842,15 @@ final class ChartCanvas: NSView {
         case .trendline(let id)?:
             onTrendlineSelect?(id)
             if let l = trendlines.first(where: { $0.id == id }) { drag = .trendMove(l, anchor: chartPoint(at: p, snap: false)) }
-        case .axis?:
-            drag = .axis(startY: p.y, startRange: range)
+        case .priceAxis?:
+            drag = .priceAxis(startY: p.y, startRange: range)
+        case .timeAxis?:
+            drag = .timeAxis(startX: p.x, startSpacing: vp.barSpacing)
         case nil:
             if selectedTrendline != nil { onTrendlineSelect?(nil) }
-            drag = .pan(startX: p.x, startOffset: rightOffset, startY: p.y, startRange: range)
+            kinetic = KineticScroll()
+            kinetic.add(position: Double(p.x), timeMs: e.timestamp * 1000)
+            drag = .pan(startX: p.x, startOffset: vp.rightOffset, startY: p.y, startRange: range)
         }
         needsDisplay = true
     }
@@ -652,27 +863,33 @@ final class ChartCanvas: NSView {
         case .none:
             break
         case .pan(let sx, let so, let sy, let sr):
-            let maxOffset = CGFloat(max(candles.count, 20))
-            rightOffset = min(max(so - (p.x - sx) / spacing, -maxOffset + 5), plot.width / spacing - 5)
+            vp.rightOffset = so
+            vp.pan(pixels: Double(p.x - sx))
+            kinetic.add(position: Double(p.x), timeMs: e.timestamp * 1000)
             if !autoScale {
                 let dp = Double(p.y - sy) / Double(plot.height - 20) * (sr.hi - sr.lo)
                 manualRange = (sr.lo + dp, sr.hi + dp)
             }
-        case .axis(let sy, let sr):
-            let factor = exp(Double(p.y - sy) / 180)
-            let mid = (sr.lo + sr.hi) / 2, half = (sr.hi - sr.lo) / 2 * factor
+        case .priceAxis(let sy, let sr):
+            // TradingView's price-scale drag: dragging down zooms out, up zooms in, around the center.
+            let h = Double(plot.height)
+            let start = h - Double(sy), now = max(0, h - Double(p.y))
+            let coeff = max(0.1, (start + (h - 1) * 0.2) / (now + (h - 1) * 0.2))
+            let mid = (sr.lo + sr.hi) / 2, half = (sr.hi - sr.lo) / 2 * coeff
             manualRange = (mid - half, mid + half)
             autoScale = false
+        case .timeAxis(let sx, let ss):
+            vp.scaleTimeAxis(startSpacing: ss, startX: Double(sx - plot.minX), x: Double(p.x - plot.minX))
         case .line(let id):
             dragPrice = price(y: p.y)
             onLineDrag?(id, dragPrice!, false)
         case .close:
             closeGhost = price(y: p.y)
         case .trendNew:
-            trendDraft = chartPoint(at: p, snap: commandDown)
+            trendDraft = chartPoint(at: p, snap: snapActive)
         case .endpoint(let id, let isA):
             guard var l = trendlines.first(where: { $0.id == id }) else { break }
-            let pt = chartPoint(at: p, snap: commandDown)
+            let pt = chartPoint(at: p, snap: snapActive)
             if isA { l.a = pt } else { l.b = pt }
             onTrendlineUpdate?(l)
         case .trendMove(let orig, let anchor):
@@ -682,6 +899,8 @@ final class ChartCanvas: NSView {
             l.a = ChartPoint(time: orig.a.time + dt, price: orig.a.price + dp)
             l.b = ChartPoint(time: orig.b.time + dt, price: orig.b.price + dp)
             onTrendlineUpdate?(l)
+        case .measure:
+            break   // the measure follows `mouse`
         }
         updateSnapMarker()
         needsDisplay = true
@@ -703,6 +922,12 @@ final class ChartCanvas: NSView {
                 onTrendlineCreate?(start, end)
                 onToolFinished?()
             }
+        case .measure(let start, let s0):
+            // ⇧-drag: release fixes the measurement; a plain ⇧-click keeps following the mouse.
+            if hypot(p.x - s0.x, p.y - s0.y) >= 6 { measure = .fixed(start, chartPoint(at: p, snap: snapActive)) }
+        case .pan:
+            kinetic.add(position: Double(p.x), timeMs: e.timestamp * 1000)
+            if let v = kinetic.releaseSpeed(atMs: e.timestamp * 1000) { startKinetic(speed: v) }
         default:
             break
         }
@@ -716,30 +941,51 @@ final class ChartCanvas: NSView {
         needsDisplay = true
     }
 
+    // MARK: Momentum
+
+    private func startKinetic(speed v: Double) {
+        stopKinetic()
+        let start = vp.rightOffset
+        let began = Date()
+        let duration = KineticScroll.duration(speed: v)
+        kineticTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 120, repeats: true) { [weak self] t in
+            MainActor.assumeIsolated {
+                guard let self else { t.invalidate(); return }
+                let ms = Date().timeIntervalSince(began) * 1000
+                self.vp.rightOffset = start
+                self.vp.pan(pixels: KineticScroll.offset(speed: v, afterMs: min(ms, duration)))
+                self.needsDisplay = true
+                if ms >= duration { self.stopKinetic() }
+            }
+        }
+    }
+
+    private func stopKinetic() {
+        kineticTimer?.invalidate()
+        kineticTimer = nil
+    }
+
+    // MARK: Wheel & pinch
+
     override func scrollWheel(with e: NSEvent) {
+        stopKinetic()
+        syncViewport()
         let precise = e.hasPreciseScrollingDeltas
-        let dx = e.scrollingDeltaX * (precise ? 1 : 8)
-        let dy = e.scrollingDeltaY * (precise ? 1 : 8)
+        let dx = Double(e.scrollingDeltaX) * (precise ? 1 : 32)
+        let dy = Double(e.scrollingDeltaY) * (precise ? 1 : 32)
         if abs(dx) > abs(dy) {
-            let maxOffset = CGFloat(max(candles.count, 20))
-            rightOffset = min(max(rightOffset - dx / spacing, -maxOffset + 5), plot.width / spacing - 5)
-        } else {
-            zoom(by: 1 + dy * 0.008, anchorX: location(e).x)
+            vp.pan(pixels: dx)
+        } else if e.momentumPhase.isEmpty {
+            // Zoom only while the fingers are on the trackpad, not during the system's momentum phase.
+            vp.zoom(wheelDelta: dy, anchorX: Double(location(e).x - plot.minX))
         }
         needsDisplay = true
     }
 
     override func magnify(with e: NSEvent) {
-        zoom(by: 1 + e.magnification, anchorX: location(e).x)
+        syncViewport()
+        vp.pinch(magnification: Double(e.magnification), anchorX: Double(location(e).x - plot.minX))
         needsDisplay = true
-    }
-
-    private func zoom(by factor: CGFloat, anchorX: CGFloat) {
-        guard factor.isFinite, factor > 0 else { return }
-        let ax = min(max(anchorX, plot.minX), plot.maxX)
-        let idx = index(x: ax)
-        spacing = min(max(spacing * factor, 2), 48)
-        rightOffset = (plot.maxX - spacing / 2 - ax) / spacing - CGFloat(Double(candles.count - 1) - idx)
     }
 
     // MARK: Keyboard & context menu
@@ -751,7 +997,11 @@ final class ChartCanvas: NSView {
         case 53: // escape
             pendingTrendStart = nil
             trendDraft = nil
-            if tool == .trendline { onToolFinished?() } else if selectedTrendline != nil { onTrendlineSelect?(nil) }
+            if case .none = measure {
+                if tool == .trendline { onToolFinished?() } else if selectedTrendline != nil { onTrendlineSelect?(nil) }
+            } else {
+                measure = .none
+            }
             needsDisplay = true
         default:
             super.keyDown(with: e)
@@ -765,18 +1015,12 @@ final class ChartCanvas: NSView {
         case .trendline(let id)?, .endpoint(let id, _)?:
             guard let l = trendlines.first(where: { $0.id == id }) else { return nil }
             onTrendlineSelect?(id)
-            menu.addItem(ClosureMenuItem(title: l.extendRight ? "Niet meer verlengen" : "Verleng naar rechts") { [weak self] in
-                var n = l; n.extendRight.toggle(); self?.onTrendlineUpdate?(n)
-            })
-            let colors = NSMenuItem(title: "Kleur", action: nil, keyEquivalent: "")
-            let sub = NSMenu()
-            for c in DrawingColor.allCases {
-                let item = ClosureMenuItem(title: colorName(c)) { [weak self] in var n = l; n.color = c; self?.onTrendlineUpdate?(n) }
-                item.state = l.color == c ? .on : .off
-                sub.addItem(item)
-            }
-            colors.submenu = sub
-            menu.addItem(colors)
+            let right = ClosureMenuItem(title: "Verleng naar rechts") { [weak self] in var n = l; n.extendRight.toggle(); self?.onTrendlineUpdate?(n) }
+            right.state = l.extendRight ? .on : .off
+            menu.addItem(right)
+            let left = ClosureMenuItem(title: "Verleng naar links") { [weak self] in var n = l; n.extendLeft.toggle(); self?.onTrendlineUpdate?(n) }
+            left.state = l.extendLeft ? .on : .off
+            menu.addItem(left)
             menu.addItem(.separator())
             menu.addItem(ClosureMenuItem(title: "Verwijderen") { [weak self] in self?.onTrendlineDelete?(id) })
         case .line(.order(let oid))?:
@@ -785,17 +1029,6 @@ final class ChartCanvas: NSView {
             return nil
         }
         return menu
-    }
-
-    private func colorName(_ c: DrawingColor) -> String {
-        switch c {
-        case .yellow: return "Geel"
-        case .blue: return "Blauw"
-        case .purple: return "Paars"
-        case .white: return "Wit"
-        case .green: return "Groen"
-        case .red: return "Rood"
-        }
     }
 }
 
@@ -852,8 +1085,17 @@ extension ChartCanvas {
 
     var demoPlotWindowRect: CGRect { convert(plot, to: nil) }
 
+    var demoPriceLabelPoint: CGPoint {
+        computeRange()
+        return convert(CGPoint(x: plot.maxX + axisWidth / 2, y: y(lastPrice) + 7), to: nil)
+    }
+
+    func demoTimeAxisPoint(xFraction: CGFloat) -> CGPoint {
+        convert(CGPoint(x: plot.minX + plot.width * xFraction, y: plot.maxY + timeHeight / 2), to: nil)
+    }
+
     /// Number of bars currently visible left of the newest candle.
-    var demoVisibleBars: Int { max(10, Int(plot.width / spacing - rightOffset) - 2) }
+    var demoVisibleBars: Int { max(10, Int(Double(plot.width) / vp.barSpacing - vp.rightOffset) - 2) }
 
     var demoDebug: String {
         "tool=\(tool) drag=\(drag) mouse=\(String(describing: mouse)) plot=\(plot) lines=\(trendlines.count) pending=\(pendingTrendStart != nil) draft=\(trendDraft != nil)"

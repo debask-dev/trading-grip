@@ -4,6 +4,19 @@ import GripCore
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
+    var body: some View {
+        TabView {
+            AccountSettingsView()
+                .tabItem { Label("Account", systemImage: "person.crop.circle") }
+            ChartSettingsView()
+                .tabItem { Label("Chart", systemImage: "chart.bar.xaxis") }
+        }
+        .frame(width: 560, height: 720)
+    }
+}
+
+struct AccountSettingsView: View {
+    @EnvironmentObject var state: AppState
     @State private var keyInput = ""
     @State private var keyMessage: String?
     @State private var keyError = false
@@ -94,7 +107,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520, height: 720)
     }
 }
 

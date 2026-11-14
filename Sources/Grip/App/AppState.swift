@@ -69,6 +69,11 @@ final class AppState: ObservableObject {
     @Published var slippagePercent: Double { didSet { defaults.set(slippagePercent, forKey: "slippagePercent") } }
     @Published var useCrossMargin: Bool { didSet { defaults.set(useCrossMargin, forKey: "useCrossMargin") } }
     @Published var hideAmounts: Bool { didSet { defaults.set(hideAmounts, forKey: "hideAmounts") } }
+    /// Magnet: drawing and measuring always snap to candle open/high/low/close (⌘ inverts it temporarily).
+    @Published var magnet: Bool { didSet { defaults.set(magnet, forKey: "magnet") } }
+    @Published var chartStyle: ChartStyle { didSet { saveJSON(chartStyle, "chartStyle") } }
+    /// Appearance for new trendlines; follows the last change made in the line toolbar.
+    @Published var lineAppearance: LineAppearance { didSet { saveJSON(lineAppearance, "lineAppearance") } }
     @Published private(set) var agentAddress: String?
     /// Oefenmodus: live prices, simulated orders and balance (no keys needed).
     @Published var paperMode: Bool {
@@ -146,6 +151,9 @@ final class AppState: ObservableObject {
         slippagePercent = defaults.object(forKey: "slippagePercent") as? Double ?? 1.0
         useCrossMargin = defaults.object(forKey: "useCrossMargin") as? Bool ?? true
         hideAmounts = defaults.bool(forKey: "hideAmounts")
+        magnet = defaults.bool(forKey: "magnet")
+        chartStyle = Self.loadJSON(ChartStyle.self, "chartStyle") ?? .grip
+        lineAppearance = Self.loadJSON(LineAppearance.self, "lineAppearance") ?? LineAppearance()
         coin = defaults.string(forKey: "coin") ?? "BTC"
         timeframe = Timeframe(rawValue: defaults.string(forKey: "timeframe") ?? "") ?? .m15
         let demo = UserDefaults.standard.bool(forKey: "GripDemoVideo")
@@ -170,6 +178,16 @@ final class AppState: ObservableObject {
     // MARK: Derived
 
     var fmt: Fmt { Fmt(hidden: hideAmounts) }
+    var selectedLine: Trendline? { trendlines.first { $0.id == selectedTrendline } }
+
+    private func saveJSON<T: Encodable>(_ v: T, _ key: String) {
+        if !isDemoVideo, let d = try? JSONEncoder().encode(v) { defaults.set(d, forKey: key) }
+    }
+
+    private static func loadJSON<T: Decodable>(_ t: T.Type, _ key: String) -> T? {
+        guard let d = UserDefaults.standard.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(T.self, from: d)
+    }
     var asset: AssetInfo? { assets.first { $0.name == coin } }
     var price: Double { mids[coin] ?? candles.last?.close ?? 0 }
     var position: Position? { account.position(for: coin) }
@@ -733,7 +751,7 @@ final class AppState: ObservableObject {
     // MARK: Trendlines
 
     func addTrendline(_ a: ChartPoint, _ b: ChartPoint) {
-        let line = Trendline(coin: coin, a: a, b: b)
+        let line = Trendline(coin: coin, a: a, b: b, appearance: lineAppearance)
         trendlines.append(line)
         selectedTrendline = line.id
         saveTrendlines()
@@ -749,6 +767,16 @@ final class AppState: ObservableObject {
         trendlines.removeAll { $0.id == id }
         if selectedTrendline == id { selectedTrendline = nil }
         saveTrendlines()
+    }
+
+    /// Changes the selected line from the toolbar; the new look becomes the default for new lines.
+    func styleSelectedLine(_ change: (inout LineAppearance) -> Void) {
+        guard var l = selectedLine else { return }
+        var ap = l.appearance
+        change(&ap)
+        l.appearance = ap
+        updateTrendline(l)
+        lineAppearance = ap
     }
 
     func deleteSelectedTrendline() {

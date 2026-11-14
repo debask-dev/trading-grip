@@ -21,6 +21,10 @@ struct ChartView: NSViewRepresentable {
         v.resetKey = "\(s.network.rawValue)-\(s.coin)-\(s.timeframe.rawValue)"
         v.candles = s.candles
         v.timeframe = s.timeframe
+        v.coin = s.coin
+        v.magnet = s.magnet
+        v.style = s.chartStyle
+        v.newLineAppearance = s.lineAppearance
         v.lastPrice = s.price
         v.lines = s.chartLines
         v.trendlines = s.coinTrendlines

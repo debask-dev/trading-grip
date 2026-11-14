@@ -19,7 +19,9 @@ final class DemoDirector {
 
     func run() {
         Task { @MainActor in
-            do { try await script() } catch { note("demo stopped: \(error)") }
+            do {
+                if UserDefaults.standard.string(forKey: "GripDemoScript") == "full" { try await script() } else { try await featureScript() }
+            } catch { note("demo stopped: \(error)") }
             writeLog()
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             NSApp.terminate(nil)
@@ -154,6 +156,160 @@ final class DemoDirector {
         note("done")
     }
 
+    // MARK: Feature tour (new chart features)
+
+    private func featureScript() async throws {
+        for _ in 0..<100 where state.candles.isEmpty || state.chartCanvas?.window == nil || state.price <= 0 { try await sleep(0.2) }
+        guard let window = state.chartCanvas?.window, let screen = window.screen ?? NSScreen.main, let canvas = state.chartCanvas else { note("no window"); return }
+        window.setFrame(screen.visibleFrame, display: true)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        CGDisplayHideCursor(CGMainDisplayID())
+        overlay = DemoOverlay(screen: screen)
+        cursor = CGPoint(x: screen.frame.midX, y: screen.frame.midY)
+        overlay?.set(cursor: cursor)
+        try await sleep(2.0)
+        note("ready")
+
+        // 1. OHLC legend
+        caption("OHLC-waarden van de candle onder je muis, linksboven")
+        try await hoverChart(from: 0.15, to: 0.85, price: state.price, seconds: 4.2)
+        try await sleep(0.6)
+
+        // 2. Countdown
+        caption("Aftelklok tot de volgende candle, onder de koers")
+        let label = screenPoint(window: canvas.demoPriceLabelPoint)
+        try await moveCursor(to: CGPoint(x: label.x - 70, y: label.y + 36), seconds: 0.8)
+        try await sleep(3.4)
+
+        // 3. Wheel zoom
+        caption("Zoomen zoals TradingView: soepel en rond de cursor")
+        let zoomAt = screenPoint(window: canvas.demoPoint(price: state.price, xFraction: 0.72))
+        try await moveCursor(to: zoomAt, seconds: 0.6) { [weak self] sp in self?.hover(canvas, sp) }
+        for _ in 0..<45 {
+            if let e = scrollEvent(dy: 7, at: cursor) { canvas.scrollWheel(with: e) }
+            try await sleep(1.0 / 60)
+        }
+        try await sleep(0.7)
+        for _ in 0..<80 {
+            if let e = scrollEvent(dy: -7, at: cursor) { canvas.scrollWheel(with: e) }
+            try await sleep(1.0 / 60)
+        }
+        try await sleep(0.8)
+
+        // 4. Momentum
+        caption("Slepen met momentum: loslaten en de chart glijdt uit")
+        let a = screenPoint(window: canvas.demoPoint(price: state.price, xFraction: 0.25))
+        try await fling(from: a, to: CGPoint(x: a.x + 280, y: a.y), seconds: 0.22, canvas: canvas)
+        try await sleep(2.2)
+        let b = screenPoint(window: canvas.demoPoint(price: state.price, xFraction: 0.8))
+        try await fling(from: b, to: CGPoint(x: b.x - 300, y: b.y), seconds: 0.22, canvas: canvas)
+        try await sleep(2.2)
+
+        // 5. Time axis
+        caption("Tijd-as slepen = in- en uitzoomen · dubbelklik = terug naar standaard")
+        try await drag(fromWindow: canvas.demoTimeAxisPoint(xFraction: 0.6), toWindow: canvas.demoTimeAxisPoint(xFraction: 0.3), canvas: canvas, seconds: 1.2)
+        try await sleep(0.8)
+        try await drag(fromWindow: canvas.demoTimeAxisPoint(xFraction: 0.3), toWindow: canvas.demoTimeAxisPoint(xFraction: 0.75), canvas: canvas, seconds: 1.2)
+        try await sleep(0.6)
+        let reset = screenPoint(window: canvas.demoTimeAxisPoint(xFraction: 0.5))
+        try await moveCursor(to: reset, seconds: 0.5)
+        overlay?.ripple(at: reset)
+        if let d = event(.leftMouseDown, screen: reset, clicks: 2) { canvas.mouseDown(with: d) }
+        if let u = event(.leftMouseUp, screen: reset, clicks: 2) { canvas.mouseUp(with: u) }
+        try await sleep(1.4)
+
+        // 6. Measure
+        caption("⇧ + klik: meten · % omhoog of omlaag, aantal candles en tijd")
+        let vis = canvas.demoVisibleBars
+        if let lo = canvas.demoExtreme(from: vis * 45 / 100, to: vis * 85 / 100, high: false),
+           let hi = canvas.demoExtreme(from: 2, to: max(3, lo - 3), high: true),
+           let pLo = canvas.demoCandlePoint(fromEnd: lo, high: false), let pHi = canvas.demoCandlePoint(fromEnd: hi, high: true) {
+            let s0 = screenPoint(window: pLo), s1 = screenPoint(window: pHi)
+            try await moveCursor(to: s0, seconds: 0.8) { [weak self] sp in self?.hover(canvas, sp) }
+            overlay?.keycap = "⇧"
+            try await sleep(0.5)
+            overlay?.ripple(at: s0)
+            if let d = event(.leftMouseDown, screen: s0, flags: .shift) { canvas.mouseDown(with: d) }
+            if let u = event(.leftMouseUp, screen: s0, flags: .shift) { canvas.mouseUp(with: u) }
+            overlay?.keycap = nil
+            try await moveCursor(to: s1, seconds: 1.8) { [weak self] sp in self?.hover(canvas, sp) }
+            overlay?.ripple(at: s1)
+            if let d = event(.leftMouseDown, screen: s1) { canvas.mouseDown(with: d) }
+            if let u = event(.leftMouseUp, screen: s1) { canvas.mouseUp(with: u) }
+            try await sleep(3.6)
+            try await moveCursor(to: CGPoint(x: s1.x - 40, y: s1.y - 80), seconds: 0.5)
+            overlay?.ripple(at: cursor)
+            if let d = event(.leftMouseDown, screen: cursor) { canvas.mouseDown(with: d) }
+            if let u = event(.leftMouseUp, screen: cursor) { canvas.mouseUp(with: u) }
+        } else { note("measure targets missing") }
+        try await sleep(0.8)
+
+        // 7. Magnet + trendline + toolbar
+        caption("Magneet aan: lijnen snappen vanzelf op candle en wick")
+        try await click(anchor: "tool-magnet", fallback: { self.state.magnet = true }, done: { self.state.magnet })
+        try await sleep(0.5)
+        try await click(anchor: "tool-trend", fallback: { self.state.tool = .trendline }, done: { self.state.tool == .trendline })
+        try await sleep(0.4)
+        let vis2 = canvas.demoVisibleBars
+        if let la = canvas.demoExtreme(from: vis2 * 55 / 100, to: vis2 * 92 / 100, high: false),
+           let lb = canvas.demoExtreme(from: vis2 * 10 / 100, to: vis2 * 40 / 100, high: false),
+           let pa = canvas.demoCandlePoint(fromEnd: la, high: false), let pb = canvas.demoCandlePoint(fromEnd: lb, high: false) {
+            try await drag(fromWindow: CGPoint(x: pa.x + 3, y: pa.y + 9), toWindow: CGPoint(x: pb.x - 3, y: pb.y + 9), canvas: canvas, seconds: 1.4)
+        }
+        note("lines: \(state.trendlines.count)")
+        try await sleep(1.0)
+
+        caption("Lijn aanpassen: kleur, dikte, stijl en verlengen de toekomst in")
+        try await click(anchor: "lt-#FFB547", fallback: { self.state.styleSelectedLine { $0.color = "#FFB547" } }, done: { self.state.selectedLine?.color == "#FFB547" })
+        try await sleep(0.6)
+        try await click(anchor: "lt-width-3", fallback: { self.state.styleSelectedLine { $0.width = 3 } }, done: { self.state.selectedLine?.width == 3 })
+        try await sleep(0.6)
+        try await click(anchor: "lt-dash-dashed", fallback: { self.state.styleSelectedLine { $0.dash = .dashed } }, done: { self.state.selectedLine?.dash == .dashed })
+        try await sleep(0.6)
+        try await click(anchor: "lt-extend-right", fallback: { self.state.styleSelectedLine { $0.extendRight = true } }, done: { self.state.selectedLine?.extendRight == true })
+        try await sleep(2.4)
+        state.selectedTrendline = nil
+        state.magnet = false
+
+        // 8. Candle styles
+        caption("Candle-stijl naar keuze: kleuren, wicks, randen, holle candles")
+        try await moveCursor(to: CGPoint(x: screen.frame.midX, y: screen.frame.midY + 140), seconds: 0.6)
+        for style in [ChartStyle.hollow, .classic, .blueOrange, .monochrome] {
+            state.chartStyle = style
+            try await sleep(1.8)
+        }
+        state.chartStyle = .grip
+        try await sleep(1.0)
+
+        caption("Grip · grip op je trades, grip op je risico")
+        try await sleep(3.0)
+        caption(nil)
+        note("done")
+    }
+
+    private func hover(_ canvas: ChartCanvas, _ sp: CGPoint) {
+        if let e = event(.mouseMoved, screen: sp) { canvas.mouseMoved(with: e) }
+    }
+
+    /// A quick linear drag released while still moving, so the chart keeps gliding.
+    private func fling(from a: CGPoint, to b: CGPoint, seconds: Double, canvas: ChartCanvas) async throws {
+        try await moveCursor(to: a, seconds: 0.5) { [weak self] sp in self?.hover(canvas, sp) }
+        try await sleep(0.2)
+        overlay?.pressed = true
+        if let d = event(.leftMouseDown, screen: a) { canvas.mouseDown(with: d) }
+        let steps = max(6, Int(seconds * 60))
+        for i in 1...steps {
+            let k = CGFloat(i) / CGFloat(steps)
+            cursor = CGPoint(x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k)
+            overlay?.set(cursor: cursor)
+            if let e = event(.leftMouseDragged, screen: cursor) { canvas.mouseDragged(with: e) }
+            try await sleep(seconds / Double(steps))
+        }
+        if let u = event(.leftMouseUp, screen: b) { canvas.mouseUp(with: u) }
+        overlay?.pressed = false
+    }
+
     // MARK: Building blocks
 
     private func sleep(_ s: Double) async throws { try await Task.sleep(nanoseconds: UInt64(s * 1_000_000_000)) }
@@ -201,11 +357,19 @@ final class DemoDirector {
         }
     }
 
-    private func event(_ type: NSEvent.EventType, screen sp: CGPoint, flags: NSEvent.ModifierFlags = []) -> NSEvent? {
+    private func event(_ type: NSEvent.EventType, screen sp: CGPoint, flags: NSEvent.ModifierFlags = [], clicks: Int = 1) -> NSEvent? {
         guard let w = window else { return nil }
         return NSEvent.mouseEvent(with: type, location: w.convertPoint(fromScreen: sp), modifierFlags: flags,
                                   timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
-                                  context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseUp ? 0 : 1)
+                                  context: nil, eventNumber: 0, clickCount: clicks, pressure: type == .leftMouseUp ? 0 : 1)
+    }
+
+    /// A pixel-precise scroll event (like a trackpad) at a screen point.
+    private func scrollEvent(dy: Int32, dx: Int32 = 0, at sp: CGPoint) -> NSEvent? {
+        guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0) else { return nil }
+        let mainHeight = NSScreen.screens.first?.frame.height ?? 0
+        cg.location = CGPoint(x: sp.x, y: mainHeight - sp.y)
+        return NSEvent(cgEvent: cg)
     }
 
     private func flagsEvent(_ flags: NSEvent.ModifierFlags) -> NSEvent? {

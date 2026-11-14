@@ -7,8 +7,26 @@ public struct ChartPoint: Codable, Equatable, Sendable {
     public init(time: Int64, price: Double) { self.time = time; self.price = price }
 }
 
-public enum DrawingColor: String, Codable, CaseIterable, Sendable {
-    case yellow, blue, purple, white, green, red
+public enum LineDash: String, Codable, CaseIterable, Sendable {
+    case solid, dashed, dotted
+}
+
+/// Colors offered in the line toolbar (any hex color is allowed).
+public enum LineSwatches {
+    public static let all = ["#F5D547", "#FFB547", "#FF5C6C", "#2FD394", "#5AA2FF", "#7C6CFF", "#E7EBF2", "#8A94A6"]
+}
+
+/// Appearance used for newly drawn lines (remembered from the last change in the toolbar).
+public struct LineAppearance: Codable, Equatable, Sendable {
+    public var color: String
+    public var width: Double
+    public var dash: LineDash
+    public var extendLeft: Bool
+    public var extendRight: Bool
+
+    public init(color: String = "#F5D547", width: Double = 2, dash: LineDash = .solid, extendLeft: Bool = false, extendRight: Bool = false) {
+        self.color = color; self.width = width; self.dash = dash; self.extendLeft = extendLeft; self.extendRight = extendRight
+    }
 }
 
 public struct Trendline: Codable, Equatable, Identifiable, Sendable {
@@ -16,12 +34,27 @@ public struct Trendline: Codable, Equatable, Identifiable, Sendable {
     public var coin: String
     public var a: ChartPoint
     public var b: ChartPoint
-    public var color: DrawingColor
+    public var color: String         // hex, e.g. "#F5D547"
+    public var width: Double         // 1...4 pt
+    public var dash: LineDash
+    public var extendLeft: Bool
     public var extendRight: Bool
     public var createdAt: Date
 
-    public init(id: UUID = UUID(), coin: String, a: ChartPoint, b: ChartPoint, color: DrawingColor = .yellow, extendRight: Bool = false, createdAt: Date = Date()) {
-        self.id = id; self.coin = coin; self.a = a; self.b = b; self.color = color; self.extendRight = extendRight; self.createdAt = createdAt
+    public init(id: UUID = UUID(), coin: String, a: ChartPoint, b: ChartPoint, color: String = "#F5D547", width: Double = 2,
+                dash: LineDash = .solid, extendLeft: Bool = false, extendRight: Bool = false, createdAt: Date = Date()) {
+        self.id = id; self.coin = coin; self.a = a; self.b = b; self.color = color; self.width = width; self.dash = dash
+        self.extendLeft = extendLeft; self.extendRight = extendRight; self.createdAt = createdAt
+    }
+
+    public init(coin: String, a: ChartPoint, b: ChartPoint, appearance: LineAppearance) {
+        self.init(coin: coin, a: a, b: b, color: appearance.color, width: appearance.width, dash: appearance.dash,
+                  extendLeft: appearance.extendLeft, extendRight: appearance.extendRight)
+    }
+
+    public var appearance: LineAppearance {
+        get { LineAppearance(color: color, width: width, dash: dash, extendLeft: extendLeft, extendRight: extendRight) }
+        set { color = newValue.color; width = newValue.width; dash = newValue.dash; extendLeft = newValue.extendLeft; extendRight = newValue.extendRight }
     }
 
     /// Price of the line at a given time (linear in time).
@@ -29,6 +62,25 @@ public struct Trendline: Codable, Equatable, Identifiable, Sendable {
         let dt = Double(b.time - a.time)
         if dt == 0 { return b.price }
         return a.price + (b.price - a.price) * Double(time - a.time) / dt
+    }
+
+    // Lines saved by version 0.1 used named colors and had no width/style.
+    private enum CodingKeys: String, CodingKey { case id, coin, a, b, color, width, dash, extendLeft, extendRight, createdAt }
+    private static let legacyColors = ["yellow": "#F5D547", "blue": "#5AA2FF", "purple": "#7C6CFF", "white": "#E7EBF2", "green": "#2FD394", "red": "#FF5C6C"]
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        coin = try c.decode(String.self, forKey: .coin)
+        a = try c.decode(ChartPoint.self, forKey: .a)
+        b = try c.decode(ChartPoint.self, forKey: .b)
+        let raw = try c.decodeIfPresent(String.self, forKey: .color) ?? "#F5D547"
+        color = Self.legacyColors[raw] ?? raw
+        width = try c.decodeIfPresent(Double.self, forKey: .width) ?? 2
+        dash = try c.decodeIfPresent(LineDash.self, forKey: .dash) ?? .solid
+        extendLeft = try c.decodeIfPresent(Bool.self, forKey: .extendLeft) ?? false
+        extendRight = try c.decodeIfPresent(Bool.self, forKey: .extendRight) ?? false
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     }
 }
 

@@ -19,6 +19,14 @@
   - Lijnen worden per markt bewaard en blijven staan als je van timeframe wisselt.
   - Selecteren, uiteinden verslepen, ⌫ = verwijderen. Rechtsklik voor verlengen of kleur.
 - **Timeframes**: 1m · 5m · 15m · 1h · 4h · 1d · 1w (⌘1 t/m ⌘7).
+- **Chart zoals TradingView**:
+  - Soepel zoomen: maximaal 10% per scrollstap, rond de cursor.
+  - Slepen met momentum; tijd-as slepen = zoomen; dubbelklik op een as = reset; **A**-knop = automatisch schalen.
+  - Scherpe, op schermpixels uitgelijnde candles.
+- **OHLC-legenda** linksboven voor de candle onder je muis, en een **aftelklok** tot de volgende candle onder de koers.
+- **Meten met ⇧ + klik**: % omhoog of omlaag, prijsverschil, aantal candles, tijd en volume.
+- **Candle-stijl** naar keuze (Instellingen → Chart): kleuren voor body, rand en wick, holle candles, grid en volume, met voorinstellingen.
+- **Lijnstijl**: klik een lijn aan voor de werkbalk (kleur, dikte, stijl, verlengen naar links/rechts). **Magneet** voor automatisch snappen.
 - **Privacymodus** (⇧⌘H): verbergt alle bedragen en groottes, zodat je veilig een screenshot kunt delen. Percentages en prijzen blijven zichtbaar.
 - **Tradehistorie**: afgeronde trades (van open tot volledig dicht), met entry, exit, netto PnL na fees, rendement, R-multiple en duur. Daarnaast winrate, profit factor en gemiddelde R.
 - **Portfolio**: winst/verlies en accountwaarde in de tijd (24u, week, maand, alles), plus een curve van je cumulatieve gerealiseerde winst.
@@ -46,7 +54,8 @@
 |---|---|
 | Nieuwe long / short | ⌥L / ⌥S |
 | Order plaatsen | ⌘↩ |
-| Trendlijn tekenen | ⌥T (houd ⌘ voor snap) |
+| Trendlijn tekenen | ⌥T (magneet, of houd ⌘ voor snap) |
+| Meten | ⇧ + klik, klik |
 | Timeframe | ⌘1 … ⌘7 |
 | Traden / Historie / Portfolio | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 |
 | Bedragen verbergen | ⇧⌘H |
