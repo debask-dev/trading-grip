@@ -50,7 +50,16 @@ final class ChartCanvas: NSView {
 
     /// Price range currently on screen (for placing a new order ticket sensibly).
     var visiblePriceRange: (lo: Double, hi: Double) { range }
-    var resetKey: String = "" { didSet { if oldValue != resetKey { resetView() } } }
+    var resetKey: String = "" {
+        didSet {
+            guard oldValue != resetKey else { return }
+            // Each market/timeframe keeps its own zoom and scroll position.
+            if !oldValue.isEmpty { savedViews[oldValue] = (vp.barSpacing, vp.rightOffset) }
+            resetView()
+            if let v = savedViews[resetKey] { vp.barSpacing = v.spacing; vp.rightOffset = v.offset }
+        }
+    }
+    private var savedViews: [String: (spacing: Double, offset: Double)] = [:]
 
     // MARK: Callbacks
     var labelFor: (@MainActor (LineID, Double) -> String)?

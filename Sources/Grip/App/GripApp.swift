@@ -71,6 +71,19 @@ struct GripCommands: Commands {
             Button("Volgende timeframe") { state.stepTimeframe(1) }
                 .keyboardShortcut("]", modifiers: .command)
             Divider()
+            Button("Markt openen in nieuwe tab") { state.tab = .trade; state.showMarketPicker = true }
+                .keyboardShortcut("t", modifiers: .command)
+            Button("Volgende markt") { state.selectTab(offset: 1) }
+                .keyboardShortcut(.tab, modifiers: .control)
+            Button("Vorige markt") { state.selectTab(offset: -1) }
+                .keyboardShortcut(.tab, modifiers: [.control, .shift])
+            ForEach(1..<10) { n in
+                Button("Markt \(n)") { state.selectTab(number: n) }
+                    .keyboardShortcut(KeyEquivalent(Character(String(n))), modifiers: .control)
+            }
+            Button(state.dockExpanded ? "Overzicht inklappen" : "Overzicht posities en orders") { state.dockExpanded.toggle() }
+                .keyboardShortcut("j", modifiers: .command)
+            Divider()
             Button(state.tool == .trendline ? "Trendlijn stoppen" : "Trendlijn") { state.toggleTool(.trendline) }
                 .keyboardShortcut("t", modifiers: .option)
             Button("Horizontale lijn op cursor") { state.addLineAtCursor(vertical: false) }

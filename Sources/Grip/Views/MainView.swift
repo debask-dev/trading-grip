@@ -18,7 +18,7 @@ struct MainView: View {
         .background(Theme.bg)
         .toolbar {
             ToolbarItem(placement: .navigation) {
-                CoinPicker()
+                MarketTabs()
             }
             ToolbarItem(placement: .principal) {
                 Picker("Weergave", selection: $state.tab) {
@@ -130,23 +130,18 @@ enum MarketSort: String, CaseIterable { case volume, change, name }
 
 struct CoinPicker: View {
     @EnvironmentObject var state: AppState
-    @State private var open = false
     @State private var query = ""
     @AppStorage("marketSort") private var sortRaw = MarketSort.volume.rawValue
     @AppStorage("marketSortAsc") private var ascending = false
 
     var body: some View {
         Button {
-            open.toggle()
+            state.showMarketPicker.toggle()
         } label: {
-            HStack(spacing: 6) {
-                Text("\(state.coin)-PERP").font(.system(size: 13, weight: .semibold))
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.muted)
-            }
-            .padding(.horizontal, 6)
+            Image(systemName: "plus").font(.system(size: 11, weight: .semibold)).padding(.horizontal, 6)
         }
-        .help("Kies markt")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
+        .help("Markt openen in een nieuwe tab (⌘T)")
+        .popover(isPresented: $state.showMarketPicker, arrowEdge: .bottom) {
             VStack(spacing: 8) {
                 TextField("Zoek markt", text: $query)
                     .textFieldStyle(.roundedBorder)
@@ -162,7 +157,7 @@ struct CoinPicker: View {
                 List(filtered) { a in
                     Button {
                         state.coin = a.name
-                        open = false
+                        state.showMarketPicker = false
                         query = ""
                     } label: {
                         HStack(spacing: 0) {
@@ -307,6 +302,7 @@ struct TradeScreen: View {
                             LineToolbar(line: line).padding(.top, 34)
                         }
                     }
+                StatusDock()
             }
             Divider().overlay(Theme.line)
             TradePanel()

@@ -215,16 +215,25 @@ final class AppState: ObservableObject {
         didSet {
             guard oldValue != coin else { return }
             defaults.set(coin, forKey: "coin")
-            ticket = nil
+            // Each tab keeps its own half-filled order and timeframe.
+            stashedTickets[oldValue] = ticket
+            ticket = stashedTickets.removeValue(forKey: coin) ?? nil
             selectedTrendline = nil
             hourStats = nil
-            Task { await loadCandles(); await refreshHourStats() }
+            if !openMarkets.contains(coin) { openMarkets.append(coin) }
+            if let raw = tabTimeframes[coin], let tf = Timeframe(rawValue: raw), tf != timeframe {
+                timeframe = tf       // loads the candles
+                Task { await refreshHourStats() }
+            } else {
+                Task { await loadCandles(); await refreshHourStats() }
+            }
         }
     }
     @Published var timeframe: Timeframe {
         didSet {
             guard oldValue != timeframe else { return }
             defaults.set(timeframe.rawValue, forKey: "timeframe")
+            tabTimeframes[coin] = timeframe.rawValue
             Task { await loadCandles() }
         }
     }
@@ -308,6 +317,17 @@ final class AppState: ObservableObject {
     /// Stop / take-profit fields show % from the entry instead of a price.
     @Published var stopInPct: Bool = UserDefaults.standard.bool(forKey: "stopInPct") { didSet { defaults.set(stopInPct, forKey: "stopInPct") } }
     @Published var tpInPct: Bool = UserDefaults.standard.bool(forKey: "tpInPct") { didSet { defaults.set(tpInPct, forKey: "tpInPct") } }
+    /// Markets open as tabs (in this order). Markets with a position or order always get a tab too.
+    @Published var openMarkets: [String] = UserDefaults.standard.stringArray(forKey: "openMarkets") ?? [] { didSet { defaults.set(openMarkets, forKey: "openMarkets") } }
+    var tabTimeframes: [String: String] = (UserDefaults.standard.dictionary(forKey: "tabTimeframes") as? [String: String]) ?? [:] {
+        didSet { UserDefaults.standard.set(tabTimeframes, forKey: "tabTimeframes") }
+    }
+    var stashedTickets: [String: Ticket?] = [:]
+    @Published var showMarketPicker = false
+    @Published var dockExpanded: Bool = UserDefaults.standard.bool(forKey: "dockExpanded") { didSet { defaults.set(dockExpanded, forKey: "dockExpanded") } }
+    @Published var dockTab: Int = 0
+    @Published var dockHeight: Double = UserDefaults.standard.object(forKey: "dockHeight") as? Double ?? 220 { didSet { defaults.set(dockHeight, forKey: "dockHeight") } }
+
     /// Chart indicators (volume first). Shown as chips next to the OHLC line.
     @Published var indicators: [IndicatorConfig] = AppState.loadIndicators() { didSet { saveJSON(indicators, "indicators") } }
     @Published var legendCollapsed: Bool = UserDefaults.standard.bool(forKey: "legendCollapsed") { didSet { defaults.set(legendCollapsed, forKey: "legendCollapsed") } }
