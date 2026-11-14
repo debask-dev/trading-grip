@@ -60,6 +60,9 @@ jobs:
             exit 1
           fi
           echo "Grip draait."
+          sample Grip 2 -file smoke/sample.txt >/dev/null 2>&1 || true
+          log show --last 2m --predicate 'process == "Grip"' --style compact > smoke/log.txt 2>&1 || true
+          grep -iE "Grip error|fault|crash" smoke/log.txt | tail -20 || true
           screencapture -x smoke/screen-1.png || echo "screencapture niet beschikbaar"
           sleep 5
           screencapture -x smoke/screen-2.png || true
@@ -70,7 +73,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: screenshots-${{ env.VERSION }}
-          path: smoke/*.png
+          path: |
+            smoke/*.png
+            smoke/*.txt
           if-no-files-found: ignore
           retention-days: 14
 

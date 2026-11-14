@@ -951,6 +951,7 @@ final class AppState: ObservableObject {
     // MARK: Toasts
 
     func toast(_ text: String, _ kind: Toast.Kind = .info) {
+        if kind == .error { NSLog("Grip error: %@", text) }
         let t = Toast(text: text, kind: kind)
         withAnimation(.easeOut(duration: 0.2)) { toasts.append(t) }
         let delay: Double = kind == .error ? 7 : 4
