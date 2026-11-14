@@ -149,7 +149,7 @@ struct TicketCard: View {
                     .frame(width: 92)
                     .keyboardShortcut(.cancelAction)
                 Button {
-                    Task { await state.placeTicket() }
+                    state.requestPlaceTicket()
                 } label: {
                     HStack {
                         if state.busy { ProgressView().controlSize(.small) }
@@ -201,15 +201,23 @@ struct PositionCard: View {
 
     var body: some View {
         if let pos = state.position {
-            let u = (state.price - pos.entryPx) * pos.size
+            let u = state.net(for: pos)
             let eq = max(state.account.accountValue, 1)
+            let ot = state.openTrade
             Card(title: "Open positie", trailing: AnyView(SidePill(isLong: pos.isLong))) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(state.fmt.signedUsd(u)).mono(26, .bold).foregroundStyle(Theme.pnl(u))
-                    Text("\(state.fmt.size(pos.size, coin: state.coin, decimals: state.szDecimals)) @ \(Fmt.price(pos.entryPx)) · \(Fmt.percent(u / eq)) van portfolio")
+                    Text("netto na fees · \(Fmt.percent(u / eq)) van portfolio")
                         .mono(11).foregroundStyle(Theme.muted)
                 }
                 VStack(spacing: 6) {
+                    KV("Gem. entry", Fmt.price(pos.entryPx), color: Theme.blue)
+                    if let be = state.breakEven { KV("Break-even", Fmt.price(be), color: Theme.muted) }
+                    if let ot {
+                        if ot.realized != 0 { KV("Al gerealiseerd", state.fmt.signedUsd(ot.realized, decimals: 2), color: Theme.pnl(ot.realized)) }
+                        KV("Fees betaald", state.fmt.usd(-ot.feesPaid, decimals: 2), color: Theme.muted)
+                        if ot.funding != 0 { KV("Funding", state.fmt.signedUsd(ot.funding, decimals: 2), color: Theme.pnl(ot.funding)) }
+                    }
                     KV("Hefboom", "\(pos.leverage)× \(pos.isCross ? "cross" : "isolated")")
                     if let liq = pos.liquidationPx { KV("Liquidatie", Fmt.price(liq), color: Theme.orange) }
                 }
@@ -217,7 +225,7 @@ struct PositionCard: View {
                 Text("DEELS SLUITEN (MARKET)").font(.system(size: 10.5, weight: .semibold)).tracking(0.8).foregroundStyle(Theme.muted)
                 HStack(spacing: 6) {
                     ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { f in
-                        Button("\(Int(f * 100))%") { Task { await state.closePosition(fraction: f) } }
+                        Button("\(Int(f * 100))%") { state.requestClose(fraction: f) }
                             .buttonStyle(ChipStyle(active: false, large: true))
                             .disabled(state.busy)
                             .demoAnchor("close-\(f)")

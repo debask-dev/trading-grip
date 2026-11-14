@@ -41,6 +41,8 @@ public final class PaperExchange: Codable, @unchecked Sendable {
     public private(set) var orders: [Order] = []
     public private(set) var fills: [Fill] = []
     public private(set) var snapshots: [Snapshot] = []
+    /// What each order was (entry limit, take-profit, stop, market close) to label fills.
+    public private(set) var orderKinds: [Int64: OrderKindTag] = [:]
     private var leverage: [String: (Int, Bool)] = [:]
     private var nextOid: Int64 = 1_000_000
     private var nextTid: Int64 = 1
@@ -52,7 +54,7 @@ public final class PaperExchange: Codable, @unchecked Sendable {
 
     // MARK: Codable (tuple dictionary needs manual coding)
 
-    private enum CodingKeys: String, CodingKey { case startingBalance, balance, holdings, orders, fills, snapshots, leverage, nextOid, nextTid }
+    private enum CodingKeys: String, CodingKey { case startingBalance, balance, holdings, orders, fills, snapshots, leverage, nextOid, nextTid, orderKinds }
     private struct Lev: Codable { var value: Int; var cross: Bool }
 
     public required init(from decoder: Decoder) throws {
@@ -66,6 +68,8 @@ public final class PaperExchange: Codable, @unchecked Sendable {
         leverage = (try c.decodeIfPresent([String: Lev].self, forKey: .leverage) ?? [:]).mapValues { ($0.value, $0.cross) }
         nextOid = try c.decode(Int64.self, forKey: .nextOid)
         nextTid = try c.decode(Int64.self, forKey: .nextTid)
+        orderKinds = (try c.decodeIfPresent([String: OrderKindTag].self, forKey: .orderKinds) ?? [:])
+            .reduce(into: [:]) { acc, kv in if let k = Int64(kv.key) { acc[k] = kv.value } }
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -79,12 +83,13 @@ public final class PaperExchange: Codable, @unchecked Sendable {
         try c.encode(leverage.mapValues { Lev(value: $0.0, cross: $0.1) }, forKey: .leverage)
         try c.encode(nextOid, forKey: .nextOid)
         try c.encode(nextTid, forKey: .nextTid)
+        try c.encode(Dictionary(uniqueKeysWithValues: orderKinds.map { (String($0.key), $0.value) }), forKey: .orderKinds)
     }
 
     public func reset(balance: Double) {
         startingBalance = balance
         self.balance = balance
-        holdings = [:]; orders = []; fills = []; snapshots = []; leverage = [:]
+        holdings = [:]; orders = []; fills = []; snapshots = []; leverage = [:]; orderKinds = [:]
     }
 
     public static func now() -> Int64 { Int64(Date().timeIntervalSince1970 * 1000) }
@@ -104,6 +109,10 @@ public final class PaperExchange: Codable, @unchecked Sendable {
             let coin = r.asset.name
             guard let mark = marks[coin], mark > 0 else { throw HLError.exchange("Geen prijs voor \(coin).") }
             let oid = nextOid; nextOid += 1
+            switch r.kind {
+            case .trigger(_, _, let tpsl): orderKinds[oid] = tpsl == .tp ? .takeProfit : .stopLoss
+            case .limit(let tif): orderKinds[oid] = tif == "Ioc" ? .market : (r.reduceOnly ? .takeProfit : .limit)
+            }
             let size = HLFormat.roundSize(r.size, szDecimals: r.asset.szDecimals)
             guard size > 0 else { throw HLError.exchange("Order te klein.") }
             if !r.reduceOnly && size * mark < 10 { throw HLError.exchange("Order te klein: minimaal $10.") }

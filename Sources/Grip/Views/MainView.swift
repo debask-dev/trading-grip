@@ -44,6 +44,13 @@ struct MainView: View {
         .overlay(alignment: .top) { ToastStack().padding(.top, 10) }
         .sheet(isPresented: $state.showOnboarding) { OnboardingView() }
         .sheet(isPresented: $state.showShortcuts) { ShortcutsView() }
+        .alert(state.pendingConfirm?.title ?? "", isPresented: Binding(get: { state.pendingConfirm != nil }, set: { if !$0 { state.pendingConfirm = nil } }), presenting: state.pendingConfirm) { req in
+            Button(req.confirmTitle, role: req.destructive ? .destructive : nil) { req.action(); state.pendingConfirm = nil }
+                .keyboardShortcut(.defaultAction)
+            Button("Annuleer", role: .cancel) { state.pendingConfirm = nil }
+        } message: { req in
+            Text(req.message)
+        }
         .alert("Let op", isPresented: Binding(get: { state.securityNotice != nil }, set: { if !$0 { state.securityNotice = nil } })) {
             Button("Begrepen") { state.securityNotice = nil }
         } message: {

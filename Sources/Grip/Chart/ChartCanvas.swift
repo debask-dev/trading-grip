@@ -14,7 +14,7 @@ import GripCore
 /// Measure: ⇧ + click, move, click (or ⇧ + drag). Esc or a click clears it.
 final class ChartCanvas: NSView {
     // MARK: Inputs
-    var candles: [Candle] = []
+    var candles: [Candle] = [] { didSet { if pendingFocus != nil, oldValue.count != candles.count { applyFocusIfPossible() } } }
     var timeframe: Timeframe = .m15
     var coin = ""
     var lastPrice: Double = 0
@@ -27,6 +27,12 @@ final class ChartCanvas: NSView {
     var magnet = false
     var style: ChartStyle = .grip { didSet { if oldValue != style { colorCache = [:] } } }
     var newLineAppearance = LineAppearance()
+    var markers: [ChartMarker] = []
+    var tradeLinks: [ChartTradeLink] = []
+    var highlightTradeID: String?
+    var focus: ChartFocus? { didSet { if focus?.token != oldValue?.token { pendingFocus = focus; applyFocusIfPossible() } } }
+    private var pendingFocus: ChartFocus?
+    private var hoveredMarker: String?
     var resetKey: String = "" { didSet { if oldValue != resetKey { resetView() } } }
 
     // MARK: Callbacks
@@ -319,8 +325,11 @@ final class ChartCanvas: NSView {
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: plot).addClip()
         if style.showVolume { drawVolume() }
+        drawPositionZone()
         drawCandles()
+        drawTradeLinks()
         drawTrendlines()
+        drawMarkers()
         drawMeasure()
         NSGraphicsContext.restoreGraphicsState()
 
@@ -329,6 +338,7 @@ final class ChartCanvas: NSView {
         drawCrosshair()
         drawLegend()
         drawAutoButton()
+        drawMarkerTooltip()
         drawTyped()
 
         if candles.isEmpty {
@@ -706,6 +716,121 @@ final class ChartCanvas: NSView {
         }
     }
 
+    // MARK: Executions
+
+    /// Screen position of a marker: on its candle, at the fill price.
+    private func markerPoint(_ m: ChartMarker) -> CGPoint? {
+        guard let i = Snap.nearestIndex(time: m.time, candles: candles),
+              abs(candles[i].time - m.time) <= timeframe.milliseconds else { return nil }
+        return CGPoint(x: x(index: Double(i)), y: y(m.price))
+    }
+
+    private func drawMarkers() {
+        guard !markers.isEmpty, let vis = visibleIndices() else { return }
+        let lo = candles[vis.lowerBound].time, hi = candles[vis.upperBound].time + timeframe.milliseconds
+        let font = NSFont.systemFont(ofSize: 9.5, weight: .bold)
+        for m in markers where m.time >= lo - timeframe.milliseconds && m.time <= hi {
+            guard let p = markerPoint(m) else { continue }
+            let col = m.isBuy ? Palette.green : Palette.red
+            let hot = hoveredMarker == m.id || highlightTradeID == m.tradeID
+            // tick exactly at the fill price
+            col.setFill()
+            let w = max(6, spacing * 0.9)
+            NSRect(x: p.x - w / 2, y: p.y - 1, width: w, height: 2).fill()
+            // arrow: below the price for a buy (pointing up), above for a sell
+            let dir: CGFloat = m.isBuy ? 1 : -1
+            let tip = CGPoint(x: p.x, y: p.y + dir * 4)
+            let size: CGFloat = hot ? 8 : 6.5
+            let tri = NSBezierPath()
+            tri.move(to: tip)
+            tri.line(to: CGPoint(x: tip.x - size, y: tip.y + dir * size * 1.4))
+            tri.line(to: CGPoint(x: tip.x + size, y: tip.y + dir * size * 1.4))
+            tri.close()
+            tri.fill()
+            Palette.chartBg.setStroke(); tri.lineWidth = 1; tri.stroke()
+            text(m.label, at: CGPoint(x: tip.x, y: tip.y + dir * (size * 1.4 + 8)), font: font, color: col, align: .center)
+        }
+    }
+
+    private func drawTradeLinks() {
+        for l in tradeLinks {
+            let a = CGPoint(x: x(index: index(time: l.t0)), y: y(l.p0))
+            let b = CGPoint(x: x(index: index(time: l.t1)), y: y(l.p1))
+            guard max(a.x, b.x) >= plot.minX, min(a.x, b.x) <= plot.maxX else { continue }
+            let col = l.isWin ? Palette.green : Palette.red
+            let hot = highlightTradeID == l.id
+            let path = NSBezierPath()
+            path.move(to: a); path.line(to: b)
+            path.lineWidth = hot ? 2 : 1.2
+            path.setLineDash([4, 3], count: 2, phase: 0)
+            col.withAlphaComponent(hot ? 0.95 : 0.6).setStroke()
+            path.stroke()
+            if hot {
+                col.withAlphaComponent(0.08).setFill()
+                NSRect(x: min(a.x, b.x), y: plot.minY, width: abs(b.x - a.x), height: plot.height).fill()
+            }
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .semibold)
+            let mid = CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 - 10)
+            let w = (l.label as NSString).size(withAttributes: [.font: font]).width + 12
+            let r = NSRect(x: mid.x - w / 2, y: mid.y - 9, width: w, height: 18)
+            Palette.panel.withAlphaComponent(0.92).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+            text(l.label, at: CGPoint(x: r.midX, y: r.midY), font: font, color: col, align: .center)
+        }
+    }
+
+    /// Tinted area between the average entry and the current price (green in profit, red in loss).
+    private func drawPositionZone() {
+        guard let pos = lines.first(where: { $0.id == .position }), lastPrice > 0 else { return }
+        let isLong = pos.color != Palette.accent
+        let inProfit = isLong ? lastPrice >= pos.price : lastPrice <= pos.price
+        (inProfit ? Palette.green : Palette.red).withAlphaComponent(0.07).setFill()
+        let y0 = y(pos.price), y1 = y(lastPrice)
+        NSRect(x: plot.minX, y: min(y0, y1), width: plot.width, height: abs(y1 - y0)).fill()
+    }
+
+    private func drawMarkerTooltip() {
+        guard let id = hoveredMarker, let m = markers.first(where: { $0.id == id }), let p = markerPoint(m) else { return }
+        let font = NSFont.systemFont(ofSize: 11.5, weight: .medium)
+        let w = m.detail.map { ($0 as NSString).size(withAttributes: [.font: font]).width }.max()! + 20
+        let h = CGFloat(m.detail.count) * 16 + 12
+        var r = NSRect(x: p.x + 14, y: p.y - h / 2, width: w, height: h)
+        if r.maxX > plot.maxX - 4 { r.origin.x = p.x - 14 - w }
+        r.origin.y = min(max(r.minY, plot.minY + 4), plot.maxY - h - 4)
+        Palette.card.withAlphaComponent(0.97).setFill()
+        NSBezierPath(roundedRect: r, xRadius: 7, yRadius: 7).fill()
+        (m.isBuy ? Palette.green : Palette.red).setStroke()
+        let b = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: 7, yRadius: 7); b.lineWidth = 1; b.stroke()
+        for (i, line) in m.detail.enumerated() {
+            text(line, at: CGPoint(x: r.minX + 10, y: r.minY + 14 + CGFloat(i) * 16), font: i == 0 ? .systemFont(ofSize: 11.5, weight: .semibold) : font,
+                 color: i == 0 ? Palette.text : Palette.muted, align: .left)
+        }
+    }
+
+    private func markerAt(_ p: CGPoint) -> String? {
+        var best: (String, CGFloat)?
+        for m in markers {
+            guard let q = markerPoint(m) else { continue }
+            let d = min(hypot(p.x - q.x, p.y - q.y), hypot(p.x - q.x, p.y - (q.y + (m.isBuy ? 12 : -12))))
+            if d < 10, d < (best?.1 ?? .infinity) { best = (m.id, d) }
+        }
+        return best?.0
+    }
+
+    /// Scrolls and zooms so a time range (a trade) fills the middle of the chart.
+    private func applyFocusIfPossible() {
+        guard let f = pendingFocus, let first = candles.first, first.time <= f.start else { return }
+        syncViewport()
+        let i0 = index(time: f.start), i1 = index(time: f.end)
+        let bars = max(i1 - i0, 8)
+        let s = min(max(Double(plot.width) * 0.6 / bars, ChartViewport.minSpacing), vp.maxSpacing)
+        vp.setSpacing(s, keepingIndex: i1, atX: Double(plot.width) * 0.8)
+        autoScale = true
+        shownRange = nil
+        pendingFocus = nil
+        needsDisplay = true
+    }
+
     /// TradingView-style interval entry: type "15" or "4h" and press ⏎.
     private func drawTyped() {
         guard !typed.isEmpty else { return }
@@ -833,6 +958,7 @@ final class ChartCanvas: NSView {
     override func mouseMoved(with e: NSEvent) {
         mouse = location(e)
         commandDown = e.modifierFlags.contains(.command)
+        hoveredMarker = plot.contains(mouse!) ? markerAt(mouse!) : nil
         hover = tool != .cursor ? nil : hitTarget(mouse!)
         updateSnapMarker()
         updateCursor()

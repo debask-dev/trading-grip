@@ -10,6 +10,8 @@ struct SettingsView: View {
                 .tabItem { Label("Account", systemImage: "person.crop.circle") }
             ChartSettingsView()
                 .tabItem { Label("Chart", systemImage: "chart.bar.xaxis") }
+            AlertSettingsView()
+                .tabItem { Label("Meldingen", systemImage: "bell.badge") }
         }
         .frame(width: 560, height: 720)
     }
@@ -87,6 +89,48 @@ struct AccountSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+struct AlertSettingsView: View {
+    @EnvironmentObject var state: AppState
+
+    var body: some View {
+        Form {
+            Section {
+                ForEach(TradeEvent.allCases) { e in
+                    HStack {
+                        Text(e.label)
+                        Spacer()
+                        Toggle("Melding", isOn: binding(e, \.notify)).toggleStyle(.checkbox)
+                        Toggle("Geluid", isOn: binding(e, \.sound)).toggleStyle(.checkbox)
+                        Button { Notifier.shared.play(e) } label: { Image(systemName: "speaker.wave.2") }
+                            .buttonStyle(.borderless).help("Geluid afspelen (\(e.sound))")
+                    }
+                }
+            } header: {
+                Text("Meldingen en geluid")
+            } footer: {
+                Text("Meldingen verschijnen ook als Grip op de achtergrond staat; bij een fill springt het Dock-icoon. Werkt alleen zolang Grip draait. Toestemming voor meldingen regel je in Systeeminstellingen → Meldingen → Grip.")
+            }
+
+            Section("Bevestigen") {
+                Toggle("Vraag bevestiging bij market orders (openen en sluiten)", isOn: $state.confirmMarketOrders)
+            }
+
+            Section("Menubalk") {
+                Toggle("Toon positie en netto resultaat in de menubalk", isOn: $state.showMenuBar)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func binding(_ e: TradeEvent, _ key: WritableKeyPath<EventPref, Bool>) -> Binding<Bool> {
+        Binding(get: { state.pref(e)[keyPath: key] }, set: { v in
+            var p = state.pref(e)
+            p[keyPath: key] = v
+            state.eventPrefs[e.rawValue] = p
+        })
     }
 }
 

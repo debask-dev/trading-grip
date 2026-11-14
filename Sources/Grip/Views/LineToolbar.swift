@@ -146,6 +146,13 @@ struct ChartSettingsView: View {
             Section("Chart") {
                 Toggle("Rasterlijnen", isOn: $state.chartStyle.showGrid)
                 Toggle("Volume", isOn: $state.chartStyle.showVolume)
+                Picker("Koop/verkoop-markeringen", selection: $state.markerDays) {
+                    Text("Uit").tag(0)
+                    Text("Alleen huidige trade").tag(-1)
+                    Text("Laatste 7 dagen").tag(7)
+                    Text("Laatste 30 dagen").tag(30)
+                    Text("Alles").tag(3650)
+                }
             }
 
             Section {

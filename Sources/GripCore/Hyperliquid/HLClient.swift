@@ -259,6 +259,45 @@ public final class HLClient: @unchecked Sendable {
         }
     }
 
+    /// The user's own fee rates (volume tier, staking and referral discounts included).
+    public func feeRates(user: String) async throws -> FeeRates {
+        let raw = try await info(["type": "userFees", "user": user])
+        guard let obj = raw as? [String: Any] else { throw HLError.decoding("userFees") }
+        let taker = d(obj["userCrossRate"]), maker = d(obj["userAddRate"])
+        return taker > 0 ? FeeRates(taker: taker, maker: maker) : .base
+    }
+
+    /// Funding payments since `since` (paged, at most 10 pages of 500).
+    public func funding(user: String, since: Int64) async throws -> [FundingPayment] {
+        var out: [FundingPayment] = []
+        var start = since
+        for _ in 0..<10 {
+            let raw = try await info(["type": "userFunding", "user": user, "startTime": start])
+            guard let arr = raw as? [[String: Any]] else { throw HLError.decoding("userFunding") }
+            let page: [FundingPayment] = arr.compactMap { e in
+                guard let t = (e["time"] as? NSNumber)?.int64Value, let delta = e["delta"] as? [String: Any],
+                      let coin = delta["coin"] as? String else { return nil }
+                return FundingPayment(time: t, coin: coin, usdc: d(delta["usdc"]))
+            }
+            out += page
+            guard arr.count >= 500, let last = page.map({ $0.time }).max() else { break }
+            start = last + 1
+        }
+        return out
+    }
+
+    /// Order types of the user's recent orders (up to 2000), to label fills as TP / SL / close.
+    public func orderKinds(user: String) async throws -> [Int64: OrderKindTag] {
+        let raw = try await info(["type": "historicalOrders", "user": user])
+        guard let arr = raw as? [[String: Any]] else { throw HLError.decoding("historicalOrders") }
+        var out: [Int64: OrderKindTag] = [:]
+        for e in arr {
+            guard let o = e["order"] as? [String: Any], let oid = (o["oid"] as? NSNumber)?.int64Value else { continue }
+            out[oid] = OrderKindTag.from(orderType: o["orderType"] as? String ?? "Limit", reduceOnly: o["reduceOnly"] as? Bool ?? false, tif: o["tif"] as? String)
+        }
+        return out
+    }
+
     public func portfolio(user: String) async throws -> [PortfolioPeriod: PortfolioSeries] {
         let raw = try await info(["type": "portfolio", "user": user])
         guard let arr = raw as? [[Any]] else { throw HLError.decoding("portfolio") }

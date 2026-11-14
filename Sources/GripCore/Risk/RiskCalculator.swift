@@ -9,11 +9,14 @@ public struct RiskInput: Equatable, Sendable {
     public var takeProfit: Double?
     public var maxLeverage: Int
     public var szDecimals: Int
-    public var takerFeeRate: Double     // included in the risk so the stop really costs ~riskPercent
+    public var takerFeeRate: Double     // stop-loss exit (market)
+    public var entryFeeRate: Double     // maker for a limit entry, taker for a market entry
 
-    public init(accountValue: Double, riskPercent: Double, entry: Double, stopLoss: Double, takeProfit: Double?, maxLeverage: Int, szDecimals: Int, takerFeeRate: Double = 0.00045) {
+    public init(accountValue: Double, riskPercent: Double, entry: Double, stopLoss: Double, takeProfit: Double?, maxLeverage: Int, szDecimals: Int,
+                takerFeeRate: Double = 0.00045, entryFeeRate: Double? = nil) {
         self.accountValue = accountValue; self.riskPercent = riskPercent; self.entry = entry; self.stopLoss = stopLoss
         self.takeProfit = takeProfit; self.maxLeverage = maxLeverage; self.szDecimals = szDecimals; self.takerFeeRate = takerFeeRate
+        self.entryFeeRate = entryFeeRate ?? takerFeeRate
     }
 }
 
@@ -28,6 +31,8 @@ public struct RiskResult: Equatable, Sendable {
     public var potentialProfit: Double?
     public var estLiquidationPx: Double
     public var warnings: [String]
+    /// Fees for entry + stop-loss exit (already part of riskUsd).
+    public var estFees: Double = 0
 }
 
 public enum RiskCalculator {
@@ -37,7 +42,7 @@ public enum RiskCalculator {
         let isLong = i.stopLoss < i.entry
         let riskUsd = i.accountValue * i.riskPercent / 100
         // Loss per coin = price distance + fees on entry and exit.
-        let lossPerCoin = dist + i.takerFeeRate * (i.entry + i.stopLoss)
+        let lossPerCoin = dist + i.entryFeeRate * i.entry + i.takerFeeRate * i.stopLoss
         let size = HLFormat.roundSize(riskUsd / lossPerCoin, szDecimals: i.szDecimals, down: true)
         let notional = size * i.entry
         var warnings: [String] = []
@@ -69,7 +74,8 @@ public enum RiskCalculator {
         }
         return RiskResult(isLong: isLong, riskUsd: riskUsd, size: size, notional: notional, leverage: lev,
                           marginRequired: notional / Double(lev), rewardRisk: rr, potentialProfit: profit,
-                          estLiquidationPx: liq, warnings: warnings)
+                          estLiquidationPx: liq, warnings: warnings,
+                          estFees: size * (i.entryFeeRate * i.entry + i.takerFeeRate * i.stopLoss))
     }
 }
 

@@ -25,6 +25,10 @@ struct ChartView: NSViewRepresentable {
         v.magnet = s.magnet
         v.style = s.chartStyle
         v.newLineAppearance = s.lineAppearance
+        v.markers = s.chartMarkers
+        v.tradeLinks = s.chartTradeLinks
+        v.highlightTradeID = s.highlightTradeID
+        v.focus = s.chartFocus
         v.lastPrice = s.price
         v.lines = s.chartLines
         v.trendlines = s.coinTrendlines

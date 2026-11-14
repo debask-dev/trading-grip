@@ -18,6 +18,15 @@ struct GripApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands { GripCommands(state: state) }
 
+        MenuBarExtra(isInserted: Binding(get: { state.showMenuBar }, set: { state.showMenuBar = $0 })) {
+            MenuBarView()
+                .environmentObject(state)
+                .preferredColorScheme(.dark)
+        } label: {
+            Text(state.menuBarTitle)
+        }
+        .menuBarExtraStyle(.window)
+
         Window("Accounts", id: "accounts") {
             AccountsView()
                 .environmentObject(state)

@@ -133,3 +133,69 @@ final class DrawingTests: XCTestCase {
         XCTAssertEqual(Fmt.percent(0.0258), "+2,58%")
     }
 }
+
+final class ExecutionTests: XCTestCase {
+    func f(_ oid: Int64, px: Double, sz: Double, buy: Bool, t: Int64, start: Double, dir: String, pnl: Double = 0, fee: Double = 0.1, tid: Int64? = nil) -> Fill {
+        Fill(coin: "BTC", px: px, sz: sz, isBuy: buy, time: t, startPosition: start, dir: dir, closedPnl: pnl, fee: fee, oid: oid, tid: tid ?? t)
+    }
+
+    func testScaledInAndOutWithLabelsFeesAndFunding() {
+        let fills = [
+            f(1, px: 100, sz: 1, buy: true, t: 1, start: 0, dir: "Open Long"),
+            f(1, px: 102, sz: 1, buy: true, t: 2, start: 1, dir: "Open Long"),        // same order, partial fill
+            f(2, px: 98, sz: 2, buy: true, t: 3, start: 2, dir: "Open Long"),         // second entry
+            f(3, px: 110, sz: 2, buy: false, t: 4, start: 4, dir: "Close Long", pnl: 18),
+            f(4, px: 120, sz: 1, buy: false, t: 5, start: 2, dir: "Close Long", pnl: 21),
+            f(5, px: 95, sz: 1, buy: false, t: 6, start: 1, dir: "Close Long", pnl: -4),
+        ]
+        let kinds: [Int64: OrderKindTag] = [1: .limit, 2: .limit, 3: .takeProfit, 4: .takeProfit, 5: .stopLoss]
+        let funding = [FundingPayment(time: 3, coin: "BTC", usdc: -0.5), FundingPayment(time: 99, coin: "BTC", usdc: -9)]
+        let a = TradeBuilder.analyze(fills: fills, funding: funding, orderKinds: kinds)
+        XCTAssertEqual(a.closed.count, 1)
+        let t = a.closed[0]
+        XCTAssertEqual(t.executions.map(\.label), ["E1", "E2", "TP1", "TP2", "SL"])
+        XCTAssertEqual(t.entries[0].size, 2)
+        XCTAssertEqual(t.entries[0].price, 101, accuracy: 1e-9)          // VWAP of the two partial fills
+        XCTAssertEqual(t.avgEntry, 99.5, accuracy: 1e-9)
+        XCTAssertEqual(t.avgExit, (110 * 2 + 120 + 95) / 4, accuracy: 1e-9)
+        XCTAssertEqual(t.funding, -0.5, accuracy: 1e-9)                 // only during the trade
+        XCTAssertEqual(t.netPnl, 35 - 0.6 - 0.5, accuracy: 1e-9)       // gross − 6 fees + funding
+        XCTAssertTrue(a.open.isEmpty)
+    }
+
+    func testOpenTradeAndBreakEven() {
+        let fills = [
+            f(1, px: 100, sz: 2, buy: true, t: 1, start: 0, dir: "Open Long", fee: 0.2),
+            f(2, px: 110, sz: 1, buy: false, t: 2, start: 2, dir: "Close Long", pnl: 10, fee: 0.1),
+        ]
+        let a = TradeBuilder.analyze(fills: fills, funding: [FundingPayment(time: 2, coin: "BTC", usdc: -0.3)], orderKinds: [2: .takeProfit])
+        let o = try! XCTUnwrap(a.open["BTC"])
+        XCTAssertEqual(o.executions.map(\.label), ["E1", "TP1"])
+        XCTAssertEqual(o.feesPaid, 0.3, accuracy: 1e-9)
+        XCTAssertEqual(o.realized, 10)
+        // Remaining 1 long from 100: break-even is below entry thanks to the realized TP.
+        let be = try! XCTUnwrap(PositionMath.breakEven(entry: 100, size: 1, feesPaid: o.feesPaid, realized: o.realized, funding: o.funding, takerRate: 0.00045))
+        XCTAssertEqual(PositionMath.net(price: be, entry: 100, size: 1, feesPaid: 0.3, realized: 10, funding: -0.3, takerRate: 0.00045), 0, accuracy: 1e-9)
+        XCTAssertLessThan(be, 100)
+        // Short: break-even above... below entry when costs only
+        let beShort = try! XCTUnwrap(PositionMath.breakEven(entry: 100, size: -1, feesPaid: 0.1, realized: 0, funding: 0, takerRate: 0.00045))
+        XCTAssertLessThan(beShort, 100)
+        XCTAssertEqual(PositionMath.net(price: beShort, entry: 100, size: -1, feesPaid: 0.1, realized: 0, funding: 0, takerRate: 0.00045), 0, accuracy: 1e-9)
+    }
+
+    func testOrderKindMapping() {
+        XCTAssertEqual(OrderKindTag.from(orderType: "Take Profit Market", reduceOnly: true, tif: nil), .takeProfit)
+        XCTAssertEqual(OrderKindTag.from(orderType: "Stop Market", reduceOnly: true, tif: nil), .stopLoss)
+        XCTAssertEqual(OrderKindTag.from(orderType: "Limit", reduceOnly: true, tif: "Gtc"), .takeProfit)
+        XCTAssertEqual(OrderKindTag.from(orderType: "Limit", reduceOnly: true, tif: "Ioc"), .market)
+        XCTAssertEqual(OrderKindTag.from(orderType: "Limit", reduceOnly: false, tif: "Alo"), .limit)
+    }
+
+    func testMakerEntryFeesInRisk() throws {
+        let maker = try XCTUnwrap(RiskCalculator.calculate(RiskInput(accountValue: 10_000, riskPercent: 1, entry: 100, stopLoss: 99, takeProfit: nil, maxLeverage: 20, szDecimals: 3, takerFeeRate: 0.00045, entryFeeRate: 0.00015)))
+        let taker = try XCTUnwrap(RiskCalculator.calculate(RiskInput(accountValue: 10_000, riskPercent: 1, entry: 100, stopLoss: 99, takeProfit: nil, maxLeverage: 20, szDecimals: 3)))
+        XCTAssertGreaterThan(maker.size, taker.size)
+        XCTAssertGreaterThan(maker.estFees, 0)
+        XCTAssertLessThanOrEqual(maker.size * 1 + maker.estFees, 100.0001)
+    }
+}

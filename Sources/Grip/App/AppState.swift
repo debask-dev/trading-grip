@@ -33,7 +33,43 @@ struct Toast: Identifiable, Equatable {
 }
 
 enum LineID: Hashable {
-    case ticketEntry, ticketSL, ticketTP, order(Int64), position
+    case ticketEntry, ticketSL, ticketTP, order(Int64), position, breakEven, liquidation
+}
+
+/// A buy/sell marker on the chart.
+struct ChartMarker: Identifiable, Equatable {
+    let id: String
+    let time: Int64
+    let price: Double
+    let isBuy: Bool
+    let label: String
+    let detail: [String]
+    let tradeID: String
+}
+
+/// Dotted connector from average entry to average exit of a closed trade.
+struct ChartTradeLink: Identifiable, Equatable {
+    let id: String
+    let t0: Int64, p0: Double
+    let t1: Int64, p1: Double
+    let isWin: Bool
+    let label: String
+}
+
+/// A question with OK / Cancel before something irreversible (market orders).
+struct ConfirmRequest: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let confirmTitle: String
+    let destructive: Bool
+    let action: () -> Void
+}
+
+struct ChartFocus: Equatable {
+    let start: Int64
+    let end: Int64
+    let token: Int
 }
 
 struct ChartLine: Identifiable, Equatable {
@@ -135,6 +171,29 @@ final class AppState: ObservableObject {
     @Published var showOnboarding = false
     @Published var pendingOrderPrices: [Int64: Double] = [:]
     weak var chartCanvas: ChartCanvas?
+    // Fees, funding and order types (for labelled executions and net results)
+    @Published var feeRates: FeeRates = .base
+    @Published var fundingPayments: [FundingPayment] = []
+    @Published var orderKinds: [Int64: OrderKindTag] = [:]
+    @Published var analysis = TradeAnalysis(closed: [], open: [:])
+    @Published var pendingConfirm: ConfirmRequest?
+    @Published var chartFocus: ChartFocus?
+    @Published var highlightTradeID: String?
+    @Published var confirmMarketOrders: Bool = UserDefaults.standard.object(forKey: "confirmMarketOrders") as? Bool ?? true {
+        didSet { defaults.set(confirmMarketOrders, forKey: "confirmMarketOrders") }
+    }
+    /// Buy/sell markers on the chart: 0 = off, -1 = current trade only, otherwise number of days.
+    @Published var markerDays: Int = UserDefaults.standard.object(forKey: "markerDays") as? Int ?? 7 {
+        didSet { defaults.set(markerDays, forKey: "markerDays") }
+    }
+    @Published var showMenuBar: Bool = UserDefaults.standard.object(forKey: "showMenuBar") as? Bool ?? true {
+        didSet { defaults.set(showMenuBar, forKey: "showMenuBar") }
+    }
+    @Published var eventPrefs: [String: EventPref] = AppState.loadJSON([String: EventPref].self, "eventPrefs") ?? [:] {
+        didSet { saveJSON(eventPrefs, "eventPrefs") }
+    }
+    private var lastFeeFetch = Date.distantPast
+    private var previousOrders: [OpenOrder] = []
     @Published var chartResetToken = 0
     @Published var showShortcuts = false
     private var demo: DemoDirector?
@@ -228,7 +287,8 @@ final class AppState: ObservableObject {
         guard let t = ticket else { return nil }
         let entry = t.isMarket ? price : t.entry
         return RiskCalculator.calculate(RiskInput(accountValue: sizingEquity, riskPercent: riskPercent, entry: entry, stopLoss: t.stopLoss,
-                                                  takeProfit: t.takeProfit, maxLeverage: asset?.maxLeverage ?? 20, szDecimals: szDecimals))
+                                                  takeProfit: t.takeProfit, maxLeverage: asset?.maxLeverage ?? 20, szDecimals: szDecimals,
+                                                  takerFeeRate: feeRates.taker, entryFeeRate: t.isMarket ? feeRates.taker : feeRates.maker))
     }
 
     // MARK: Lifecycle
@@ -236,6 +296,7 @@ final class AppState: ObservableObject {
     func start() async {
         guard !started else { return }
         started = true
+        if !isDemoVideo { Notifier.shared.setUp() }
         configureStream()
         // Launch arguments for automated screenshots: -GripSkipOnboarding YES -GripDemoTicket YES
         if !hasAccount && !defaults.bool(forKey: "GripSkipOnboarding") { showOnboarding = true }
@@ -282,7 +343,12 @@ final class AppState: ObservableObject {
             }
         }
         stream.onConnectionChange = { [weak self] ok in
-            Task { @MainActor in self?.streamConnected = ok }
+            Task { @MainActor in
+                guard let self, self.streamConnected != ok else { return }
+                let wasConnected = self.streamConnected
+                self.streamConnected = ok
+                if wasConnected && !ok { self.notify(.connection, "Verbinding met Hyperliquid weg", "Grip probeert opnieuw te verbinden…") }
+            }
         }
         stream.start()
         stream.setCandleSubscription(coin: coin, timeframe: timeframe)
@@ -377,6 +443,10 @@ final class AppState: ObservableObject {
         guard hasAccount else { return }
         do {
             let state = try await client.accountState(user: accountAddress.trimmingCharacters(in: .whitespaces))
+            for o in state.openOrders where orderKinds[o.oid] == nil {
+                orderKinds[o.oid] = o.isTrigger ? (o.tpsl == .tp ? .takeProfit : .stopLoss) : (o.reduceOnly ? .takeProfit : .limit)
+            }
+            previousOrders = state.openOrders
             account = state
             accountError = nil
             // Drop optimistic drag prices once the exchange reflects them (or the order is gone).
@@ -394,6 +464,9 @@ final class AppState: ObservableObject {
     private func loadStoredFills() {
         if paperMode { paperChanged(); return }
         fills = store.load([Fill].self, from: fillsKey) ?? []
+        fundingPayments = store.load([FundingPayment].self, from: fillsKey.replacingOccurrences(of: "fills-", with: "funding-")) ?? []
+        orderKinds = (store.load([String: OrderKindTag].self, from: fillsKey.replacingOccurrences(of: "fills-", with: "orderkinds-")) ?? [:])
+            .reduce(into: [:]) { acc, kv in if let k = Int64(kv.key) { acc[k] = kv.value } }
         rebuildTrades()
     }
 
@@ -417,9 +490,26 @@ final class AppState: ObservableObject {
             } else {
                 for f in try await client.fills(user: user) { known[f.tid] = f }
             }
-            fills = known.values.sorted { $0.time < $1.time }
+            let previousTids = Set(fills.map(\.tid))
+            let merged = known.values.sorted { $0.time < $1.time }
+            let newFills = previousTids.isEmpty ? [] : merged.filter { !previousTids.contains($0.tid) }
+
+            if Date().timeIntervalSince(lastFeeFetch) > 3600, let rates = try? await client.feeRates(user: user) {
+                feeRates = rates
+                lastFeeFetch = Date()
+            }
+            if let kinds = try? await client.orderKinds(user: user) { orderKinds.merge(kinds) { _, new in new } }
+            let since = (fundingPayments.map(\.time).max() ?? Int64(Date().addingTimeInterval(-365 * 86400).timeIntervalSince1970 * 1000)) + 1
+            if let fresh = try? await client.funding(user: user, since: since), !fresh.isEmpty {
+                fundingPayments = Array(Set(fundingPayments + fresh)).sorted { $0.time < $1.time }
+            }
+
+            fills = merged
             store.save(fills, to: fillsKey)
+            store.save(fundingPayments, to: fillsKey.replacingOccurrences(of: "fills-", with: "funding-"))
+            store.save(Dictionary(uniqueKeysWithValues: orderKinds.map { (String($0.key), $0.value) }), to: fillsKey.replacingOccurrences(of: "fills-", with: "orderkinds-"))
             rebuildTrades()
+            announce(newFills)
             portfolio = try await client.portfolio(user: user)
         } catch {
             accountError = error.localizedDescription
@@ -427,7 +517,8 @@ final class AppState: ObservableObject {
     }
 
     private func rebuildTrades() {
-        closedTrades = TradeBuilder.build(fills: fills, plans: plans)
+        analysis = TradeBuilder.analyze(fills: fills, plans: plans, funding: fundingPayments, orderKinds: orderKinds)
+        closedTrades = analysis.closed
     }
 
     func refreshAll() async {
@@ -464,6 +555,20 @@ final class AppState: ObservableObject {
         return HLFormat.roundPrice((p / t).rounded() * t, szDecimals: szDecimals)
     }
 
+    /// Asks for confirmation first when the entry is a market order (setting).
+    func requestPlaceTicket() {
+        guard let t = ticket, let r = riskResult else { return }
+        if t.isMarket && confirmMarketOrders {
+            let side = r.isLong ? "long" : "short"
+            pendingConfirm = ConfirmRequest(
+                title: "Market \(side) openen?",
+                message: "\(fmt.size(r.size, coin: coin, decimals: szDecimals)) · ≈ \(Fmt.price(price)) · \(r.leverage)×\nRisico tot je stop: \(fmt.usd(-r.riskUsd, decimals: 2)) (incl. ≈ \(fmt.usd(r.estFees, decimals: 2)) fees)",
+                confirmTitle: "Market \(side)", destructive: false) { [weak self] in Task { await self?.placeTicket() } }
+        } else {
+            Task { await placeTicket() }
+        }
+    }
+
     func placeTicket() async {
         guard let t = ticket, let a = asset, let r = riskResult else { return }
         guard r.size > 0 else { toast("Positie is te klein.", .error); return }
@@ -494,17 +599,20 @@ final class AppState: ObservableObject {
             if !isDemoVideo { store.save(plans, to: "plans") }
 
             switch statuses.first {
-            case .filled(_, let sz, let avg)?:
-                toast("Gevuld: \(fmt.size(sz, coin: coin, decimals: szDecimals)) @ \(Fmt.price(avg)) · \(lev)×", .success)
+            case .filled?:
+                break   // the fill is announced by `announce` (notification + sound)
             case .resting?:
                 toast("Limit \(isBuy ? "long" : "short") geplaatst @ \(Fmt.price(entryPx)) · \(lev)×", .success)
+                notify(.orderPlaced, "Limit \(isBuy ? "long" : "short") geplaatst", "\(coin) @ \(Fmt.price(entryPx)) · \(lev)×")
             default:
                 toast("Order verstuurd.", .success)
             }
             ticket = nil
             await refreshAccount()
+            if case .filled? = statuses.first { await refreshHistory() }
         } catch {
             toast(error.localizedDescription, .error)
+            notify(.orderProblem, "Order niet geplaatst", error.localizedDescription)
         }
     }
 
@@ -552,6 +660,9 @@ final class AppState: ObservableObject {
     private func paperChanged() {
         account = paper.accountState(marks: marks(), assets: assets)
         fills = paper.fills
+        orderKinds = paper.orderKinds
+        fundingPayments = []
+        feeRates = .base
         rebuildTrades()
         portfolio = paper.portfolio()
         pendingOrderPrices = [:]
@@ -566,14 +677,7 @@ final class AppState: ObservableObject {
             return
         }
         paperChanged()
-        for f in filled {
-            let pnl = f.closedPnl - f.fee
-            if f.closedPnl != 0 {
-                toast("Gevuld: \(f.dir.lowercased()) \(fmt.size(f.sz, coin: f.coin, decimals: 4)) @ \(Fmt.price(f.px)) · \(fmt.signedUsd(pnl)) gerealiseerd", pnl >= 0 ? .success : .info)
-            } else {
-                toast("Gevuld: \(f.dir.lowercased()) \(fmt.size(f.sz, coin: f.coin, decimals: 4)) @ \(Fmt.price(f.px))", .success)
-            }
-        }
+        announce(filled)
     }
 
     func resetPaper(balance: Double) {
@@ -626,8 +730,28 @@ final class AppState: ObservableObject {
     }
 
     /// Market close (IOC with slippage) of a fraction of the position.
-    func closePosition(fraction: Double) async {
-        guard let pos = position, let a = asset else { return }
+    /// Market close with confirmation (setting). Works for any coin with a position.
+    func requestClose(fraction: Double, coin closeCoin: String? = nil) {
+        let c = closeCoin ?? coin
+        guard let pos = account.position(for: c) else { return }
+        guard confirmMarketOrders else { Task { await closePosition(fraction: fraction, coin: c) }; return }
+        let px = mids[c] ?? (c == coin ? price : pos.entryPx)
+        let qty = abs(pos.size) * fraction
+        let gross = (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1)
+        let fee = qty * px * feeRates.taker
+        let all = fraction >= 0.999
+        pendingConfirm = ConfirmRequest(
+            title: all ? "Hele \(c)-positie sluiten?" : "\(Int(fraction * 100))% van je \(c)-positie sluiten?",
+            message: "\(fmt.size(qty, coin: c, decimals: 4)) market · ≈ \(Fmt.price(px))\nResultaat van dit deel ≈ \(fmt.signedUsd(gross - fee, decimals: 2)) na fees" + (all ? "\nOpen TP- en SL-orders vervallen." : ""),
+            confirmTitle: all ? "Alles sluiten" : "Sluit \(Int(fraction * 100))%", destructive: true) { [weak self] in
+                Task { await self?.closePosition(fraction: fraction, coin: c) }
+            }
+    }
+
+    func closePosition(fraction: Double, coin closeCoin: String? = nil) async {
+        let c = closeCoin ?? coin
+        guard let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return }
+        let price = mids[c] ?? (c == coin ? self.price : pos.entryPx)
         let size = min(abs(pos.size), HLFormat.roundSize(abs(pos.size) * fraction, szDecimals: a.szDecimals))
         guard size > 0 else { toast("Te kleine hoeveelheid om te sluiten.", .error); return }
         let isBuy = !pos.isLong
@@ -636,14 +760,14 @@ final class AppState: ObservableObject {
         defer { busy = false }
         do {
             let st = try await execOrders([OrderRequest(asset: a, isBuy: isBuy, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Ioc"))])
-            if case .filled(_, let sz, let avg)? = st.first {
-                let pnl = (avg - pos.entryPx) * sz * (pos.isLong ? 1 : -1)
-                toast("\(Int(fraction * 100))% gesloten @ \(Fmt.price(avg)) · \(fmt.signedUsd(pnl)) gerealiseerd", pnl >= 0 ? .success : .info)
+            if case .filled? = st.first {
+                // announced via `announce` when the fill arrives
             } else {
                 toast("Sluitorder verstuurd.", .info)
             }
         } catch {
             toast(error.localizedDescription, .error)
+            notify(.orderProblem, "Sluiten mislukt", error.localizedDescription)
         }
         await refreshAccount()
         await refreshHistory()
@@ -702,6 +826,8 @@ final class AppState: ObservableObject {
         }
         if let pos = position {
             lines.append(ChartLine(id: .position, price: pos.entryPx, color: pos.isLong ? Palette.blue : Palette.accent, dashed: false, draggable: false, emphasized: true))
+            if let be = breakEven { lines.append(ChartLine(id: .breakEven, price: be, color: Palette.muted, dashed: true, draggable: false)) }
+            if let liq = pos.liquidationPx, liq > 0 { lines.append(ChartLine(id: .liquidation, price: liq, color: Palette.red.withAlphaComponent(0.8), dashed: true, draggable: false)) }
         }
         return lines
     }
@@ -731,8 +857,12 @@ final class AppState: ObservableObject {
             return "LIMIT \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))"
         case .position:
             guard let pos = position else { return "" }
-            let u = (price - pos.entryPx) * pos.size
-            return "\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  \(f.signedUsd(u))  (\(Fmt.percent(u / eq, decimals: 2)))"
+            let net = positionNet ?? 0
+            return "\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  ·  gem. \(Fmt.price(pos.entryPx))  ·  netto \(f.signedUsd(net, decimals: 2))  (\(Fmt.percent(net / eq, decimals: 2)))"
+        case .breakEven:
+            return "BE \(Fmt.price(px))  ·  break-even na fees\((openTrade?.funding ?? 0) != 0 ? " + funding" : "")"
+        case .liquidation:
+            return "LIQ \(Fmt.price(px))"
         }
     }
 
@@ -752,7 +882,7 @@ final class AppState: ObservableObject {
         case .order(let oid):
             pendingOrderPrices[oid] = px
             if ended { Task { await moveOrder(oid: oid, to: px) } }
-        case .position: break
+        case .position, .breakEven, .liquidation: break
         }
     }
 
@@ -830,6 +960,126 @@ final class AppState: ObservableObject {
         }
     }
 }
+// MARK: - Trade results, notifications, chart markers
+
+extension AppState {
+    var openTrade: OpenTrade? { analysis.open[coin] }
+
+    /// Net result of the whole open trade if closed now: realized partials + open PnL − fees (paid + exit) + funding.
+    func net(for pos: Position) -> Double {
+        let o = analysis.open[pos.coin]
+        let px = mids[pos.coin] ?? (pos.coin == coin ? price : pos.entryPx)
+        return PositionMath.net(price: px, entry: pos.entryPx, size: pos.size, feesPaid: o?.feesPaid ?? 0,
+                                realized: o?.realized ?? 0, funding: o?.funding ?? 0, takerRate: feeRates.taker)
+    }
+
+    var positionNet: Double? { position.map { net(for: $0) } }
+
+    var breakEven: Double? {
+        guard let pos = position else { return nil }
+        let o = openTrade
+        return PositionMath.breakEven(entry: pos.entryPx, size: pos.size, feesPaid: o?.feesPaid ?? 0, realized: o?.realized ?? 0,
+                                      funding: o?.funding ?? 0, takerRate: feeRates.taker)
+    }
+
+    func pref(_ e: TradeEvent) -> EventPref { eventPrefs[e.rawValue] ?? e.defaultPref }
+
+    func notify(_ e: TradeEvent, _ title: String, _ body: String) {
+        Notifier.shared.post(e, title: title, body: body, pref: pref(e), important: e == .entryFilled || e == .stopLoss || e == .takeProfit || e == .positionClosed)
+    }
+
+    /// Turns new fills into clear messages: entry, take-profit, stop-loss, closed trade with net result.
+    func announce(_ newFills: [Fill]) {
+        guard !newFills.isEmpty else { return }
+        let byOrder = Dictionary(grouping: newFills) { "\($0.coin)-\($0.oid)" }
+        for (_, group) in byOrder.sorted(by: { ($0.value.first?.time ?? 0) < ($1.value.first?.time ?? 0) }) {
+            guard let first = group.first else { continue }
+            let c = first.coin
+            let qty = group.reduce(0) { $0 + $1.sz }
+            let px = group.reduce(0) { $0 + $1.px * $1.sz } / max(qty, 1e-12)
+            let start = group.map(\.startPosition).first ?? 0
+            let end = start + group.reduce(0) { $0 + ($1.isBuy ? $1.sz : -$1.sz) }
+            let opening = abs(end) > abs(start) - 1e-12 && (start == 0 || (start > 0) == (end > 0))
+            let sizeText = fmt.size(qty, coin: c, decimals: 4)
+            if opening {
+                let side = end > 0 ? "Long" : "Short"
+                notify(.entryFilled, start == 0 ? "\(side) \(c) geopend" : "\(side) \(c) bijgekocht", "\(sizeText) @ \(Fmt.price(px))")
+                toast("\(start == 0 ? "In trade" : "Bijgekocht"): \(side.lowercased()) \(sizeText) @ \(Fmt.price(px))", .success)
+                continue
+            }
+            let realized = group.reduce(0) { $0 + $1.closedPnl - $1.fee }
+            let kind = orderKinds[first.oid]
+            if abs(end) < 1e-9, let trade = analysis.closed.first(where: { $0.coin == c }) {
+                let r = trade.rMultiple.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? ""
+                let how = kind == .stopLoss ? "Stop-loss" : (kind == .takeProfit ? "Take-profit" : "Gesloten")
+                notify(trade.isWin ? .positionClosed : (kind == .stopLoss ? .stopLoss : .positionClosed),
+                       "\(c)-trade gesloten (\(how))", "Netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r) · fees \(fmt.usd(trade.fees, decimals: 2))")
+                toast("Trade gesloten: netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r)", trade.isWin ? .success : .info)
+            } else if kind == .stopLoss {
+                notify(.stopLoss, "Stop-loss \(c) geraakt", "\(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
+                toast("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))", .info)
+            } else {
+                let label = analysis.open[c]?.executions.last(where: { $0.oid == first.oid })?.label ?? "Deel"
+                notify(kind == .takeProfit ? .takeProfit : .positionClosed, "\(label) \(c) gevuld", "\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
+                toast("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))", realized >= 0 ? .success : .info)
+            }
+        }
+    }
+
+    /// Markers for the current coin, according to the marker setting.
+    var chartMarkers: [ChartMarker] {
+        guard markerDays != 0 else { return [] }
+        let f = fmt
+        var execs: [Execution]
+        if markerDays < 0 {
+            execs = analysis.open[coin]?.executions ?? []
+        } else {
+            let from = Int64(Date().addingTimeInterval(-Double(markerDays) * 86400).timeIntervalSince1970 * 1000)
+            execs = analysis.executions.filter { $0.coin == coin && $0.time >= from }
+        }
+        return execs.map { e in
+            let when = Date(timeIntervalSince1970: Double(e.time) / 1000).formatted(date: .abbreviated, time: .shortened)
+            var lines = ["\(e.label) · \(e.isBuy ? "Koop" : "Verkoop") \(f.size(e.size, coin: e.coin, decimals: 4))",
+                         "@ \(Fmt.price(e.price))  ·  \(when)",
+                         "Fee \(f.usd(e.fee, decimals: 2))\(e.fills > 1 ? "  ·  \(e.fills) fills" : "")"]
+            if e.role == .exit { lines.append("Resultaat \(f.signedUsd(e.closedPnl - e.fee, decimals: 2))") }
+            return ChartMarker(id: e.id, time: e.time, price: e.price, isBuy: e.isBuy, label: e.label, detail: lines, tradeID: e.tradeID)
+        }
+    }
+
+    var chartTradeLinks: [ChartTradeLink] {
+        guard markerDays > 0 else { return [] }
+        let from = Date().addingTimeInterval(-Double(markerDays) * 86400)
+        return analysis.closed.filter { $0.coin == coin && $0.closeTime >= from }.map { t in
+            let r = t.rMultiple.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? ""
+            return ChartTradeLink(id: t.id, t0: Int64(t.openTime.timeIntervalSince1970 * 1000), p0: t.avgEntry,
+                                  t1: Int64(t.closeTime.timeIntervalSince1970 * 1000), p1: t.avgExit,
+                                  isWin: t.isWin, label: fmt.signedUsd(t.netPnl, decimals: 2) + r)
+        }
+    }
+
+    /// Shows a closed trade on the chart (from History).
+    func show(trade t: ClosedTrade) {
+        let dur = t.duration
+        let tf: Timeframe = dur < 3 * 3600 ? .m5 : dur < 24 * 3600 ? .m15 : dur < 5 * 86400 ? .h1 : dur < 30 * 86400 ? .h4 : .d1
+        if markerDays >= 0 && markerDays < 3650 && t.closeTime < Date().addingTimeInterval(-Double(max(markerDays, 0)) * 86400) { markerDays = 3650 }
+        coin = t.coin
+        timeframe = tf
+        tab = .trade
+        highlightTradeID = t.id
+        chartFocus = ChartFocus(start: Int64(t.openTime.timeIntervalSince1970 * 1000), end: Int64(t.closeTime.timeIntervalSince1970 * 1000),
+                                token: (chartFocus?.token ?? 0) + 1)
+    }
+
+    var menuBarTitle: String {
+        let positions = account.positions
+        guard !positions.isEmpty else { return "Grip" }
+        let total = positions.reduce(0) { $0 + net(for: $1) }
+        if positions.count == 1, let p = positions.first { return "\(p.coin) \(fmt.signedUsd(total, decimals: 2))" }
+        return "\(positions.count) pos. \(fmt.signedUsd(total, decimals: 2))"
+    }
+}
+
 // MARK: - Accounts
 
 enum ConnectionStatus: Equatable {
