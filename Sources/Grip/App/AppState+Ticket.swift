@@ -24,6 +24,7 @@ extension AppState {
         input.takeProfits = ticketTPTargets(t)
         if !riskSizing || t.lock == .size { input.sizeOverride = t.size ?? 0 }
         input.leverageOverride = t.leverage
+        input.availableMargin = isExampleEquity ? nil : account.withdrawable
         if let pos = position {
             input.existing = ExistingPosition(size: pos.size, entryPx: pos.entryPx, isLong: pos.isLong, leverage: pos.leverage)
         }
@@ -276,7 +277,7 @@ extension AppState {
             let entryCount = reqs.count
 
             if t.reduceOnly {
-                _ = try await execOrders(reqs)
+                try throwIfRejected(try await execOrders(reqs))
                 toast("Verkleinorder\(entryCount > 1 ? "s" : "") geplaatst: \(fmt.size(pl.size, coin: c, decimals: a.szDecimals))", .success)
                 ticket = nil
                 await refreshAccount()
@@ -292,6 +293,7 @@ extension AppState {
                                          kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl)))
             }
             let statuses = try await execOrders(reqs, grouping: simple ? "normalTpsl" : "na")
+            let rejected = statuses.compactMap { if case .error(let e) = $0 { return e } else { return nil } }
 
             // From here Grip keeps stop and take-profits in line with the position.
             var m = managed[c] ?? ManagedTrade(isLong: isBuy, lastSize: 0)
@@ -303,11 +305,8 @@ extension AppState {
             let ladder = t.tps.filter { isBuy ? $0.price > avg : $0.price < avg }
             if !ladder.isEmpty {
                 let total = max(ladder.reduce(0) { $0 + $1.pct }, 1)
+                // Placed by the keeper at the first fill; when adding, this new ladder replaces the old take-profits.
                 m.tps = PendingTPs(entryOid: 0, isLong: isBuy, prices: ladder.map(\.price), fractions: ladder.map { $0.pct / total })
-                if pos != nil {
-                    // New ladder replaces the old take-profits.
-                    for o in existingTPOrders { try? await execCancel(a, oid: o.oid) }
-                }
             }
             if t.moveSLToBreakEven && ladder.count > 1 { breakEvenAfterTP.insert(c) } else if pos == nil { breakEvenAfterTP.remove(c) }
             managed[c] = m
@@ -341,6 +340,11 @@ extension AppState {
             } else if !filled {
                 toast("Order verstuurd.", .success)
             }
+            if !rejected.isEmpty {
+                let msg = Array(Set(rejected)).joined(separator: " · ")
+                toast("Niet alles geplaatst: \(msg)", .error)
+                notify(.orderProblem, "Order deels geweigerd", msg)
+            }
             ticket = nil
             await refreshAccount()
             if filled { await refreshHistory() }
@@ -352,88 +356,91 @@ extension AppState {
 
     // MARK: Keeping stop and take-profits in line
 
-    /// Called after every account refresh. When a managed position grows, the stop is resized to the whole position and the
-    /// take-profits are placed or scaled up. When it is closed, entries that never filled are cancelled.
+    /// Called after every account refresh (live and practice). The keeper (GripCore, tested against the practice
+    /// exchange) decides; this executes: resize or place the stop, place or scale take-profits, cancel unfilled entries.
     func reconcileManaged() async {
         guard !reconciling, !managed.isEmpty else { return }
         reconciling = true
         defer { reconciling = false }
-        let openOids = Set(account.openOrders.map(\.oid))
-        for (c, m0) in managed {
-            var m = m0
-            let pos = account.position(for: c)
-            let size = pos.map { $0.isLong == m.isLong ? abs($0.size) : 0 } ?? 0
-            m.entryOids = m.entryOids.filter { openOids.contains($0) }
-            let a = assets.first { $0.name == c }
-
-            if size < 1e-12 {
-                if m.lastSize > 1e-12 {
-                    if let a, !m.entryOids.isEmpty {
-                        for oid in m.entryOids { try? await execCancel(a, oid: oid) }
-                        toast("\(c)-trade gesloten: \(m.entryOids.count) niet-gevulde entr\(m.entryOids.count > 1 ? "ies" : "y") geannuleerd", .info)
-                    }
-                    managed[c] = nil
-                    breakEvenAfterTP.remove(c)
-                } else if m.entryOids.isEmpty {
-                    managed[c] = nil          // cancelled before anything filled
-                } else {
-                    managed[c] = m
-                }
-                continue
-            }
-
-            if size > m.lastSize + 1e-12, let a, let pos {
-                await syncStop(coin: c, asset: a, position: pos, stop: m.stop)
-                if let tps = m.tps {
-                    if await placeTakeProfits(coin: c, tps) { m.tps = nil }
-                } else if m.lastSize > 1e-12 {
-                    await scaleTakeProfits(coin: c, asset: a, from: m.lastSize, to: size)
+        for (c, m) in managed {
+            guard let a = assets.first(where: { $0.name == c }) else { continue }
+            let step = TradeKeeper.step(m, position: account.position(for: c), orders: account.orders(for: c), szDecimals: a.szDecimals)
+            var ok = true
+            for action in step.actions {
+                do {
+                    try await execute(action, coin: c, asset: a, isLong: m.isLong)
+                } catch {
+                    ok = false
+                    toast("\(describe(action)) mislukt: \(error.localizedDescription)", .error)
+                    notify(.orderProblem, "\(describe(action)) mislukt", "\(c): \(error.localizedDescription)")
                 }
             }
-            m.lastSize = size
-            managed[c] = m
-        }
-    }
-
-    /// One stop for the whole position.
-    private func syncStop(coin c: String, asset a: AssetInfo, position pos: Position, stop: Double?) async {
-        let size = HLFormat.roundSize(abs(pos.size), szDecimals: a.szDecimals)
-        let sl = account.openOrders.first { $0.coin == c && $0.isTrigger && $0.tpsl == .sl }
-        guard let px = stop ?? sl?.displayPx else { return }
-        let req = OrderRequest(asset: a, isBuy: !pos.isLong, size: size, limitPx: px, reduceOnly: true,
-                               kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))
-        do {
-            if let sl {
-                // size 0 = a stop for the whole position already
-                guard sl.size > 0, abs(sl.size - size) > 1e-12 || abs(sl.displayPx - px) > 1e-9 else { return }
-                try await execModify(oid: sl.oid, req)
+            if step.cancelledEntries > 0 {
+                toast("\(c)-trade gesloten: \(step.cancelledEntries) niet-gevulde entr\(step.cancelledEntries > 1 ? "ies" : "y") geannuleerd", .info)
+            }
+            if ok {
+                managed[c] = step.next
+                if step.next == nil { breakEvenAfterTP.remove(c) }
             } else {
-                _ = try await execOrders([req])
+                // Try again at the next refresh, but not forever.
+                var retry = m
+                retry.failures += 1
+                if retry.failures >= 3 {
+                    managed[c] = step.next
+                    notify(.orderProblem, "Grip stopt met bijwerken van \(c)", "Controleer je stop-loss en take-profits zelf.")
+                } else {
+                    managed[c] = retry
+                }
             }
-        } catch {
-            toast("Stop-loss niet bijgewerkt: \(error.localizedDescription)", .error)
-            notify(.orderProblem, "Stop-loss niet bijgewerkt", error.localizedDescription)
+            if !step.actions.isEmpty {
+                if let fresh = try? await refreshedState() { account = fresh }
+            }
         }
     }
 
-    /// Same prices and split, larger sizes (after adding to the position).
-    private func scaleTakeProfits(coin c: String, asset a: AssetInfo, from old: Double, to new: Double) async {
-        let factor = new / old
-        let orders = account.openOrders.filter { $0.coin == c && $0.reduceOnly && (!$0.isTrigger || $0.tpsl == .tp) && $0.size > 0 }
-        guard !orders.isEmpty else { return }
-        var n = 0
-        for o in orders {
-            let sz = HLFormat.roundSize(o.size * factor, szDecimals: a.szDecimals)
-            guard sz > o.size else { continue }
-            let kind: OrderKind = o.isTrigger ? .trigger(triggerPx: o.displayPx, isMarket: true, tpsl: .tp) : .limit(tif: "Gtc")
-            do {
-                try await execModify(oid: o.oid, OrderRequest(asset: a, isBuy: o.isBuy, size: sz, limitPx: o.displayPx, reduceOnly: true, kind: kind))
-                n += 1
-            } catch {
-                toast("Take-profit niet vergroot: \(error.localizedDescription)", .error)
-            }
+    private func refreshedState() async throws -> AccountState {
+        if paperMode { return paper.accountState(marks: marks(), assets: assets) }
+        return try await client.accountState(user: accountAddress.trimmingCharacters(in: .whitespaces))
+    }
+
+    private func describe(_ a: KeeperAction) -> String {
+        switch a {
+        case .cancel: return "Entry annuleren"
+        case .placeStop: return "Stop-loss plaatsen"
+        case .resizeStop: return "Stop-loss bijwerken"
+        case .placeTakeProfits: return "Take-profits plaatsen"
+        case .resizeTakeProfit: return "Take-profit vergroten"
         }
-        if n > 0 { toast("\(n) take-profit\(n > 1 ? "s" : "") meegegroeid met je positie", .success) }
+    }
+
+    private func execute(_ action: KeeperAction, coin c: String, asset a: AssetInfo, isLong: Bool) async throws {
+        switch action {
+        case .cancel(let oid):
+            try await execCancel(a, oid: oid)
+        case .placeStop(let size, let px):
+            let st = try await execOrders([OrderRequest(asset: a, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true,
+                                                        kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))])
+            try throwIfRejected(st)
+            toast("Stop-loss op \(Fmt.price(px)) voor de hele positie", .success)
+        case .resizeStop(let oid, let size, let px):
+            try await execModify(oid: oid, OrderRequest(asset: a, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true,
+                                                        kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl)))
+        case .placeTakeProfits(let tps):
+            let st = try await execOrders(tps.map { OrderRequest(asset: a, isBuy: !isLong, size: $0.size, limitPx: HLFormat.roundPrice($0.price, szDecimals: a.szDecimals),
+                                                                 reduceOnly: true, kind: .limit(tif: "Gtc")) })
+            for s in st { if case .resting(let oid) = s { orderKinds[oid] = .takeProfit } }
+            try throwIfRejected(st)
+            toast("\(tps.count) take-profit\(tps.count > 1 ? "s" : "") geplaatst", .success)
+        case .resizeTakeProfit(let oid, let size, let px, let isTrigger):
+            let kind: OrderKind = isTrigger ? .trigger(triggerPx: px, isMarket: true, tpsl: .tp) : .limit(tif: "Gtc")
+            try await execModify(oid: oid, OrderRequest(asset: a, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true, kind: kind))
+        }
+    }
+
+    /// Hyperliquid answers per order; only the first error used to be thrown. Report the rest too.
+    func throwIfRejected(_ statuses: [OrderStatus]) throws {
+        let errors = statuses.compactMap { if case .error(let e) = $0 { return e } else { return nil } }
+        if !errors.isEmpty { throw HLError.exchange(Array(Set(errors)).joined(separator: " · ")) }
     }
 }
 #endif

@@ -343,7 +343,8 @@ public final class HLClient: @unchecked Sendable {
         let data = resp?["data"] as? [String: Any]
         guard let statuses = data?["statuses"] as? [Any] else { return [.success] }
         let parsed: [OrderStatus] = statuses.map { s in
-            if let str = s as? String { return str == "success" ? .success : .error(str) }
+            // Linked TP/SL orders answer "waitingForFill" / "waitingForTrigger": accepted.
+            if let str = s as? String { return str == "success" || str.hasPrefix("waiting") ? .success : .error(Self.translate(str)) }
             guard let m = s as? [String: Any] else { return .error("?") }
             if let r = m["resting"] as? [String: Any] { return .resting(oid: (r["oid"] as? NSNumber)?.int64Value ?? 0) }
             if let f = m["filled"] as? [String: Any] {

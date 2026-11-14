@@ -101,6 +101,22 @@ public final class PaperExchange: Codable, @unchecked Sendable {
         if var h = holdings[coin] { h.leverage = lev; h.isCross = isCross; holdings[coin] = h }
     }
 
+    /// Margin that is free: account value minus margin of positions and of resting orders that open or add.
+    func freeMargin(marks: [String: Double]) -> Double {
+        var value = balance
+        var used = 0.0
+        for (coin, h) in holdings {
+            let mark = marks[coin] ?? h.entry
+            value += (mark - h.entry) * h.size
+            used += abs(h.size) * mark / Double(max(h.leverage, 1))
+        }
+        for o in orders where !o.reduceOnly && o.triggerPx == nil {
+            let lev = leverage[o.coin]?.0 ?? holdings[o.coin]?.leverage ?? 1
+            used += o.size * o.px / Double(max(lev, 1))
+        }
+        return value - used
+    }
+
     public func place(_ reqs: [OrderRequest], grouping: String, marks: [String: Double], time: Int64 = PaperExchange.now()) throws -> [OrderStatus] {
         var statuses: [OrderStatus] = []
         var parent: Int64? = nil
@@ -116,6 +132,17 @@ public final class PaperExchange: Codable, @unchecked Sendable {
             let size = HLFormat.roundSize(r.size, szDecimals: r.asset.szDecimals)
             guard size > 0 else { throw HLError.exchange("Order te klein.") }
             if !r.reduceOnly && size * mark < 10 { throw HLError.exchange("Order te klein: minimaal $10.") }
+            if !r.reduceOnly, case .limit = r.kind {
+                // Like Hyperliquid: an order that opens or adds needs free margin at the chosen leverage.
+                let lev = leverage[coin]?.0 ?? holdings[coin]?.leverage ?? 1
+                let opensOrAdds = (holdings[coin]?.size ?? 0) == 0 || ((holdings[coin]?.size ?? 0) > 0) == r.isBuy
+                let crossesNow = r.isBuy ? r.limitPx >= mark : r.limitPx <= mark
+                if opensOrAdds && size * (crossesNow ? mark : r.limitPx) / Double(max(lev, 1)) > freeMargin(marks: marks) + 1e-9 {
+                    if i == 0 { throw HLError.exchange("Onvoldoende marge voor deze order.") }
+                    statuses.append(.error("Onvoldoende marge voor deze order."))
+                    continue
+                }
+            }
 
             switch r.kind {
             case .trigger(let trig, let isMarket, let tpsl):

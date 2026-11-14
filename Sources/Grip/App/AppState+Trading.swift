@@ -7,36 +7,6 @@ import UniformTypeIdentifiers
 // MARK: - Take-profit ladder, break-even, chart ✕ buttons, price menu
 
 extension AppState {
-    /// Places the ladder as reduce-only GTC limit orders; the last level gets whatever is left.
-    @discardableResult
-    func placeTakeProfits(coin c: String, _ p: PendingTPs) async -> Bool {
-        guard let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return false }
-        let total = abs(pos.size)
-        var left = total
-        var reqs: [OrderRequest] = []
-        for (i, px) in p.prices.enumerated() {
-            let isLast = i == p.prices.count - 1
-            var sz = isLast ? left : HLFormat.roundSize(total * p.fractions[i], szDecimals: a.szDecimals, down: true)
-            sz = min(sz, left)
-            guard sz > 0 else { continue }
-            left -= sz
-            reqs.append(OrderRequest(asset: a, isBuy: !pos.isLong, size: HLFormat.roundSize(sz, szDecimals: a.szDecimals),
-                                     limitPx: HLFormat.roundPrice(px, szDecimals: a.szDecimals), reduceOnly: true, kind: .limit(tif: "Gtc")))
-        }
-        guard !reqs.isEmpty else { return true }
-        do {
-            let st = try await execOrders(reqs)
-            for s in st { if case .resting(let oid) = s { orderKinds[oid] = .takeProfit } }
-            toast("\(reqs.count) take-profit\(reqs.count > 1 ? "s" : "") geplaatst", .success)
-            await refreshAccount()
-            return true
-        } catch {
-            toast("Take-profits niet geplaatst: \(error.localizedDescription)", .error)
-            notify(.orderProblem, "Take-profits niet geplaatst", error.localizedDescription)
-            return false
-        }
-    }
-
     /// After a take-profit: move the stop-loss to break-even (when chosen in the ticket).
     func moveStopToBreakEven(coin c: String, force: Bool = false) async {
         guard force || breakEvenAfterTP.contains(c), let pos = account.position(for: c),
@@ -158,7 +128,8 @@ extension AppState {
             m.stop = pos == nil ? sl : (existingStopOrder?.displayPx ?? sl)
             if existingTPOrders.isEmpty { m.tps = PendingTPs(entryOid: 0, isLong: long, prices: [tp], fractions: [1]) }
             managed[coin] = m
-            _ = try await execOrders(reqs, grouping: pos == nil ? "normalTpsl" : "na")
+            let st = try await execOrders(reqs, grouping: pos == nil ? "normalTpsl" : "na")
+            try throwIfRejected(st)
             await refreshAccount()
             await refreshHistory()
         } catch {

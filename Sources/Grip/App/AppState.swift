@@ -71,41 +71,6 @@ struct Ticket: Equatable {
     var takeProfit: Double? { tps.first?.price }
 }
 
-/// What Grip keeps in line for a trade it placed: the stop covers the whole position, TPs grow with it,
-/// and unfilled entries are cancelled when the position is closed.
-struct ManagedTrade: Codable, Equatable {
-    var isLong: Bool
-    var stop: Double?
-    var entryOids: [Int64] = []
-    /// Position size the last time Grip looked (to see entries filling).
-    var lastSize: Double
-    /// Take-profit ladder still to be placed after the first fill.
-    var tps: PendingTPs?
-}
-
-/// Take-profits waiting for a limit entry to fill (Hyperliquid only accepts them once there is a position).
-struct PendingTPs: Codable, Equatable {
-    var entryOid: Int64
-    var isLong: Bool
-    var prices: [Double]
-    var fractions: [Double]
-}
-
-struct HourStats: Equatable {
-    var change: Double
-    var high: Double
-    var low: Double
-    var volume: Double
-    var volumeUsd: Double
-}
-
-struct Toast: Identifiable, Equatable {
-    enum Kind { case info, success, error }
-    let id = UUID()
-    var text: String
-    var kind: Kind
-}
-
 enum LineID: Hashable {
     case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, order(Int64), position, breakEven, liquidation
 }
@@ -308,7 +273,7 @@ final class AppState: ObservableObject {
     private var historyTimer: Timer?
     private var hourTimer: Timer?
     private var candleRequestID = 0
-    private var paper: PaperExchange
+    private(set) var paper: PaperExchange
     private var paperKey: String { isDemoVideo ? "paper-demo" : "paper-\(network.rawValue)" }
 
     init() {
@@ -545,6 +510,7 @@ final class AppState: ObservableObject {
             account = paper.accountState(marks: marks(), assets: assets)
             portfolio = paper.portfolio()
             if !isDemoVideo { store.save(paper, to: paperKey) }
+            await reconcileManaged()
             return
         }
         guard hasAccount else { return }
@@ -715,6 +681,7 @@ final class AppState: ObservableObject {
         }
         paperChanged()
         announce(filled)
+        Task { await reconcileManaged() }
     }
 
     func resetPaper(balance: Double) {
@@ -760,6 +727,7 @@ final class AppState: ObservableObject {
               let a = assets.first(where: { $0.name == o.coin }) else { return }
         do {
             try await execCancel(a, oid: oid)
+            if o.isTrigger && o.tpsl == .sl { managed[o.coin]?.stop = nil }   // removed on purpose: don't put it back
             toast("\(orderName(o)) geannuleerd", .info)
         } catch {
             toast(error.localizedDescription, .error)

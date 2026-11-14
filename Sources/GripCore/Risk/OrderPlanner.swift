@@ -30,6 +30,8 @@ public struct PlanInput: Equatable, Sendable {
     public var takerFeeRate: Double = 0.00045
     public var entryFeeRate: Double = 0.00015
     public var existing: ExistingPosition?
+    /// Margin that is free right now (withdrawable). The new part must fit in it.
+    public var availableMargin: Double?
 
     public init(accountValue: Double, riskPercent: Double?, isLong: Bool, entries: [TPTarget], stopLoss: Double?,
                 maxLeverage: Int, szDecimals: Int) {
@@ -171,11 +173,19 @@ public enum OrderPlanner {
         }
         let posLong = isReduce ? !i.isLong : i.isLong
         let afterNotional = afterSize * afterEntry
-        let minLev = max(1, Int((afterNotional / i.accountValue - 1e-9).rounded(.up)))
+        var minLev = max(1, Int((afterNotional / i.accountValue - 1e-9).rounded(.up)))
+        if let avail = i.availableMargin, !isReduce, notional > 0 {
+            if avail <= 0.01 {
+                warnings.append("Geen vrije marge beschikbaar.")
+            } else {
+                // Keep 5% free for fees and price moves.
+                minLev = max(minLev, Int((notional / (avail * 0.95) - 1e-9).rounded(.up)))
+            }
+        }
         var lev = max(minLev, existing?.leverage ?? 1)
         if let chosen = i.leverageOverride {
             lev = chosen
-            if chosen < minLev && !isReduce { warnings.append("Te weinig marge voor deze grootte: minstens \(minLev)× nodig.") }
+            if chosen < minLev && !isReduce { warnings.append("Te weinig vrije marge voor deze grootte: minstens \(minLev)× nodig.") }
             if let e = existing, chosen < e.leverage, !isReduce {
                 warnings.append("Lager dan je huidige hefboom (\(e.leverage)×). Hyperliquid staat verlagen met een open positie vaak niet toe.")
             }
@@ -209,6 +219,10 @@ public enum OrderPlanner {
             }
             if !ladder.isEmpty {
                 let tf = ladder.reduce(0) { $0 + $1.fraction }
+                let sized = TradeKeeper.split(total: afterSize, prices: ladder.map(\.price), fractions: ladder.map(\.fraction), szDecimals: i.szDecimals)
+                if afterSize > 0 && sized.count < ladder.count {
+                    warnings.append("Take-profits onder $10 (het minimum van Hyperliquid) worden samengevoegd: \(sized.count) in plaats van \(ladder.count).")
+                }
                 profit = ladder.reduce(0) { acc, tp in
                     let q = afterSize * tp.fraction / max(tf, 1)
                     return acc + q * (dir * (tp.price - afterEntry) - i.entryFeeRate * tp.price)
