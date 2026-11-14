@@ -309,7 +309,10 @@ final class AppState: ObservableObject {
         useCrossMargin = defaults.object(forKey: "useCrossMargin") as? Bool ?? true
         hideAmounts = defaults.bool(forKey: "hideAmounts")
         magnet = defaults.bool(forKey: "magnet")
-        chartStyle = Self.loadJSON(ChartStyle.self, "chartStyle") ?? .grip
+        var style = Self.loadJSON(ChartStyle.self, "chartStyle") ?? .grip
+        // Untouched old default → the new default with #E68538 for falling candles.
+        if style == .greenRed { style = .grip }
+        chartStyle = style
         var appearance = Self.loadJSON(LineAppearance.self, "lineAppearance") ?? LineAppearance()
         if appearance.color == "#F5D547" { appearance.color = LineSwatches.defaultColor }   // old default → your TradingView color
         lineAppearance = appearance

@@ -21,8 +21,12 @@ public struct ChartStyle: Codable, Equatable, Sendable {
         self.hollowUp = hollowUp; self.showGrid = showGrid; self.showVolume = showVolume
     }
 
-    public static let grip = ChartStyle(upBody: "#2FD394", downBody: "#FF5C6C", upBorder: "#2FD394", downBorder: "#FF5C6C",
-                                        upWick: "#2FD394", downWick: "#FF5C6C")
+    /// Default: green up, the orange from the user's TradingView for falling candles.
+    public static let grip = ChartStyle(upBody: "#2FD394", downBody: "#E68538", upBorder: "#2FD394", downBorder: "#E68538",
+                                        upWick: "#2FD394", downWick: "#E68538")
+    /// The previous default (green/red), kept as a preset.
+    public static let greenRed = ChartStyle(upBody: "#2FD394", downBody: "#FF5C6C", upBorder: "#2FD394", downBorder: "#FF5C6C",
+                                            upWick: "#2FD394", downWick: "#FF5C6C")
     public static let classic = ChartStyle(upBody: "#26A69A", downBody: "#EF5350", upBorder: "#26A69A", downBorder: "#EF5350",
                                            upWick: "#26A69A", downWick: "#EF5350")
     public static let hollow = ChartStyle(upBody: "#2FD394", downBody: "#FF5C6C", upBorder: "#2FD394", downBorder: "#FF5C6C",
@@ -33,12 +37,12 @@ public struct ChartStyle: Codable, Equatable, Sendable {
                                               upWick: "#5AA2FF", downWick: "#FFB547")
 
     public static let presets: [(name: String, style: ChartStyle)] = [
-        ("Grip", .grip), ("Klassiek", .classic), ("Hol", .hollow), ("Monochroom", .monochrome), ("Blauw/oranje", .blueOrange),
+        ("Grip", .grip), ("Groen/rood", .greenRed), ("Klassiek", .classic), ("Hol", .hollow), ("Monochroom", .monochrome), ("Blauw/oranje", .blueOrange),
     ]
 
     public var presetName: String? { Self.presets.first { $0.style == self }?.name }
 
-    /// Quick colors offered for candles (first one: the orange the user uses in TradingView).
+    /// Quick colors offered for candles (first one: the orange the user uses in TradingView for falling candles).
     public static let swatches = ["#E68538", "#2FD394", "#26A69A", "#089981", "#FF5C6C", "#EF5350", "#F23645", "#5AA2FF", "#E7EBF2", "#5D6676"]
 
     /// Sets body, border and wick color for rising or falling candles at once.
