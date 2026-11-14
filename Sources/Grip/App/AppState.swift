@@ -645,7 +645,9 @@ final class AppState: ObservableObject {
         guard p > 0 else { return }
         if panelMode == .quick { panelMode = .risk }
         let r = { (v: Double) in HLFormat.roundPrice(v, szDecimals: self.szDecimals) }
-        let vis = chartCanvas?.visiblePriceRange ?? (lo: p * 0.98, hi: p * 1.02)
+        // Use what is visible on the chart, unless that is not known yet (chart not drawn) or nonsensical.
+        var vis = (lo: p * 0.98, hi: p * 1.02)
+        if let v = chartCanvas?.visiblePriceRange, v.lo > 0, v.hi > v.lo, v.lo < p, v.hi > p { vis = v }
         let span = max(vis.hi - vis.lo, p * 0.002)
         let dir: Double = long ? 1 : -1
         let entry = atPrice ?? (p - dir * span * 0.04)

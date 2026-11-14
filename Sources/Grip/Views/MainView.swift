@@ -224,31 +224,39 @@ struct MarketStatsStrip: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
+        ViewThatFits(in: .horizontal) {
+            row(compact: false)
+            row(compact: true)
+        }
+        .font(.system(size: 11))
+        .padding(.horizontal, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 26)
+        .background(Theme.panel.opacity(0.7))
+    }
+
+    private func row(compact: Bool) -> some View {
         let ctx = state.contexts[state.coin]
         let h = state.hourStats
-        HStack(spacing: 18) {
+        return HStack(spacing: compact ? 12 : 18) {
             if let h {
                 stat("1u", Fmt.percent(h.change, decimals: 2), Theme.pnl(h.change))
-                stat("1u bereik", "\(Fmt.price(h.low)) – \(Fmt.price(h.high))")
-                stat("1u volume", "\(Fmt.compact(h.volume)) \(state.coin) · $\(Fmt.compact(h.volumeUsd))")
+                if !compact { stat("1u bereik", "\(Fmt.price(h.low)) – \(Fmt.price(h.high))") }
+                stat("1u vol", compact ? "$\(Fmt.compact(h.volumeUsd))" : "\(Fmt.compact(h.volume)) \(state.coin) · $\(Fmt.compact(h.volumeUsd))")
             } else {
                 stat("1u", "…")
             }
             Divider().frame(height: 14)
             if let ctx {
-                stat("24u volume", "$" + Fmt.compact(ctx.dayVolume))
+                stat("24u vol", "$" + Fmt.compact(ctx.dayVolume))
                 stat("Funding", Fmt.number(ctx.funding * 100, decimals: 4) + "%/u", ctx.funding >= 0 ? Theme.muted : Theme.green)
                     .help("Funding per uur. Positief: longs betalen shorts.")
-                if ctx.openInterest > 0 {
+                if ctx.openInterest > 0 && !compact {
                     stat("Open interest", "$" + Fmt.compact(ctx.openInterest * ctx.markPx))
                 }
             }
-            Spacer()
         }
-        .font(.system(size: 11))
-        .padding(.horizontal, 14)
-        .frame(height: 26)
-        .background(Theme.panel.opacity(0.7))
+        .fixedSize()
     }
 
     private func stat(_ k: String, _ v: String, _ color: Color = Theme.text) -> some View {
@@ -257,6 +265,7 @@ struct MarketStatsStrip: View {
             Text(v).mono(11).foregroundStyle(color)
         }
         .lineLimit(1)
+        .fixedSize()
     }
 }
 
