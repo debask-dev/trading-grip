@@ -69,8 +69,23 @@ final class ChartCanvas: NSView {
     // MARK: Layout
     private let axisWidth: CGFloat = 78
     private let timeHeight: CGFloat = 26
-    private var plot: NSRect { NSRect(x: 0, y: 0, width: max(10, bounds.width - axisWidth), height: max(10, bounds.height - timeHeight)) }
-    private var autoButtonRect: NSRect { NSRect(x: plot.maxX + (axisWidth - 26) / 2, y: plot.maxY + 3, width: 26, height: timeHeight - 6) }
+    /// Price area. Indicator panes (RSI …) sit between it and the time axis.
+    private var plot: NSRect { NSRect(x: 0, y: 0, width: max(10, bounds.width - axisWidth), height: max(60, bounds.height - timeHeight - panesTotal)) }
+    private var timeTop: CGFloat { bounds.height - timeHeight }
+    private var autoButtonRect: NSRect { NSRect(x: plot.maxX + (axisWidth - 26) / 2, y: timeTop + 3, width: 26, height: timeHeight - 6) }
+    fileprivate var paneHeights: [(config: IndicatorConfig, height: CGFloat)] {
+        let full = max(10, bounds.height - timeHeight)
+        let h = max(56, min(120, full * 0.2))
+        return indicators.filter { $0.visible && $0.kind.placement == .pane }.map { ($0, $0.collapsed ? 20 : h) }
+    }
+    private var panesTotal: CGFloat { paneHeights.reduce(0) { $0 + $1.height } }
+    fileprivate func paneRects() -> [(config: IndicatorConfig, rect: NSRect)] {
+        var top = bounds.height - timeHeight - panesTotal
+        return paneHeights.map { item in
+            defer { top += item.height }
+            return (item.config, NSRect(x: 0, y: top, width: max(10, bounds.width - axisWidth), height: item.height))
+        }
+    }
     private var pixelRatio: CGFloat { window?.backingScaleFactor ?? 2 }
 
     // MARK: Viewport
@@ -120,6 +135,21 @@ final class ChartCanvas: NSView {
     private var dragPrice: Double?
     private var closeGhost: Double?
     private var mouse: CGPoint?
+    // Indicators
+    var indicators: [IndicatorConfig] = []
+    var legendCollapsed = false
+    var onIndicatorToggle: (@MainActor (UUID) -> Void)?
+    var onIndicatorRemove: (@MainActor (UUID) -> Void)?
+    var onPaneCollapse: (@MainActor (UUID) -> Void)?
+    var onLegendCollapse: (@MainActor (Bool) -> Void)?
+    var makeIndicatorSettings: (@MainActor (UUID) -> NSViewController)?
+    fileprivate enum ChipPart { case toggle, gear, remove }
+    fileprivate var chipRects: [(id: UUID, rect: NSRect, part: ChipPart)] = []
+    fileprivate var chipFullRects: [UUID: NSRect] = [:]
+    fileprivate var legendToggleRect: NSRect?
+    fileprivate var paneLabelRects: [(id: UUID, rect: NSRect)] = []
+    fileprivate var hoveredChip: UUID?
+    fileprivate var seriesCache: [UUID: (key: String, a: [Double?], b: [Double?], c: [Double?])] = [:]
     private var hover: Hover?
     private var commandDown = false
     private var pendingTrendStart: ChartPoint?
@@ -183,6 +213,8 @@ final class ChartCanvas: NSView {
 
     /// Called by the overlay layer.
     fileprivate func drawOverlay() {
+        drawIndicatorAxisTags()
+        drawPaneLabels()
         drawCrosshair()
         drawLegend()
         drawMarkerTooltip()
@@ -384,15 +416,17 @@ final class ChartCanvas: NSView {
         drawGridAndAxes()
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(rect: plot).addClip()
-        if style.showVolume { drawVolume() }
+        if indicators.contains(where: { $0.kind == .volume && $0.visible }) { drawVolume() }
         drawPositionZone()
         drawCandles()
+        drawOverlayIndicators()
         drawTradeLinks()
         drawTrendlines()
         drawMarkers()
         drawMeasure()
         NSGraphicsContext.restoreGraphicsState()
 
+        drawPanes()
         drawLastPrice()
         drawOrderLines()
         drawAutoButton()
@@ -430,7 +464,7 @@ final class ChartCanvas: NSView {
         Palette.line.setStroke()
         let v = NSBezierPath()
         v.move(to: CGPoint(x: plot.maxX + 0.5, y: 0)); v.line(to: CGPoint(x: plot.maxX + 0.5, y: bounds.maxY))
-        v.move(to: CGPoint(x: 0, y: plot.maxY + 0.5)); v.line(to: CGPoint(x: bounds.maxX, y: plot.maxY + 0.5))
+        v.move(to: CGPoint(x: 0, y: timeTop + 0.5)); v.line(to: CGPoint(x: bounds.maxX, y: timeTop + 0.5))
         v.lineWidth = 1
         v.stroke()
 
@@ -455,11 +489,11 @@ final class ChartCanvas: NSView {
             if style.showGrid {
                 Palette.grid.setStroke()
                 let gl = NSBezierPath()
-                gl.move(to: CGPoint(x: xx, y: plot.minY)); gl.line(to: CGPoint(x: xx, y: plot.maxY))
+                gl.move(to: CGPoint(x: xx, y: plot.minY)); gl.line(to: CGPoint(x: xx, y: timeTop))
                 gl.lineWidth = 1
                 gl.stroke()
             }
-            text(timeFormatter.string(from: date), at: CGPoint(x: xx, y: plot.maxY + timeHeight / 2), font: font, color: Palette.dim, align: .center)
+            text(timeFormatter.string(from: date), at: CGPoint(x: xx, y: timeTop + timeHeight / 2), font: font, color: Palette.dim, align: .center)
         }
     }
 
@@ -730,7 +764,7 @@ final class ChartCanvas: NSView {
         let idx = candles.isEmpty ? index(x: m.x) : max(index(x: m.x).rounded(), 0)
         let cx = align(candles.isEmpty ? m.x : x(index: idx)) + 0.5 / pixelRatio
         let v = NSBezierPath()
-        v.move(to: CGPoint(x: cx, y: plot.minY)); v.line(to: CGPoint(x: cx, y: plot.maxY))
+        v.move(to: CGPoint(x: cx, y: plot.minY)); v.line(to: CGPoint(x: cx, y: timeTop))
         v.lineWidth = 1; v.setLineDash([3, 3], count: 2, phase: 0); v.stroke()
         axisTag(price(y: m.y), at: m.y, bg: Palette.card, fg: Palette.text)
         guard !candles.isEmpty else { return }
@@ -739,7 +773,7 @@ final class ChartCanvas: NSView {
         let s = timeFormatter.string(from: Date(timeIntervalSince1970: Double(t) / 1000))
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         let w = (s as NSString).size(withAttributes: [.font: font]).width + 14
-        let r = NSRect(x: min(max(cx - w / 2, plot.minX), plot.maxX - w), y: plot.maxY + 3, width: w, height: timeHeight - 6)
+        let r = NSRect(x: min(max(cx - w / 2, plot.minX), plot.maxX - w), y: timeTop + 3, width: w, height: timeHeight - 6)
         Palette.card.setFill(); NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
         text(s, at: CGPoint(x: r.midX, y: r.midY), font: font, color: Palette.text, align: .center)
     }
@@ -776,6 +810,7 @@ final class ChartCanvas: NSView {
             put("\(compact(c.volume)) \(coin)", num, Palette.text, gap: 6)
             put("$" + compact(c.volume * (c.high + c.low + c.close) / 3), num, Palette.muted, gap: 0)
         }
+        drawIndicatorChips(startX: penX + 16, y: yy, index: i)
     }
 
     // MARK: Executions
@@ -972,7 +1007,7 @@ final class ChartCanvas: NSView {
     private func hitTarget(_ p: CGPoint) -> Hover? {
         if autoButtonRect.insetBy(dx: -2, dy: -2).contains(p) { return .autoButton }
         if p.x > plot.maxX && p.y < plot.maxY { return .priceAxis }
-        if p.y > plot.maxY && p.x < plot.maxX { return .timeAxis }
+        if p.y > timeTop && p.x < plot.maxX { return .timeAxis }
         for (id, r) in lineCloseRects where r.insetBy(dx: -2, dy: -2).contains(p) { return .lineClose(id) }
         for (id, r) in labelRects where r.insetBy(dx: -2, dy: -3).contains(p) {
             if lines.first(where: { $0.id == id })?.draggable == true { return .line(id) }
@@ -1022,6 +1057,7 @@ final class ChartCanvas: NSView {
     }
 
     private func updateCursor() {
+        if let m = mouse, isOverLegend(m) { NSCursor.pointingHand.set(); return }
         if tool != .cursor { NSCursor.crosshair.set(); return }
         switch hover {
         case .line?, .closeHandle?: NSCursor.openHand.set()
@@ -1040,6 +1076,7 @@ final class ChartCanvas: NSView {
         hoveredMarker = plot.contains(mouse!) ? markerAt(mouse!) : nil
         hoveredTrade = hoveredMarker.flatMap { id in markers.first { $0.id == id }?.tradeID } ?? (plot.contains(mouse!) ? tradeLinkAt(mouse!) : nil)
         hover = tool != .cursor ? nil : hitTarget(mouse!)
+        updateChipHover(mouse!)
         updateSnapMarker()
         updateCursor()
         let after = "\(String(describing: hover))|\(hoveredMarker ?? "")|\(hoveredTrade ?? "")|\(String(describing: snapMarker))"
@@ -1072,9 +1109,11 @@ final class ChartCanvas: NSView {
         commandDown = e.modifierFlags.contains(.command)
         computeRange()
 
+        if handleLegendClick(at: p) { return }
+
         if e.clickCount == 2 {
             if p.x > plot.maxX && p.y < plot.maxY { autoScale = true; needsDisplay = true; return }
-            if p.y > plot.maxY && p.x < plot.maxX { vp.reset(); needsDisplay = true; return }
+            if p.y > timeTop && p.x < plot.maxX { vp.reset(); needsDisplay = true; return }
         }
 
         // Measuring: ⇧ + click (or the ruler tool) starts, the next click ends, a further click clears.
@@ -1434,6 +1473,239 @@ final class ClosureMenuItem: NSMenuItem {
     required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     @objc private func run() { MainActor.assumeIsolated { handler() } }
 }
+
+// MARK: - Indicators
+
+extension ChartCanvas {
+    /// Values per candle for one indicator, cached until the candles or settings change.
+    fileprivate func series(_ c: IndicatorConfig) -> (a: [Double?], b: [Double?], c: [Double?]) {
+        let last = candles.last.map { "\($0.time)-\($0.close)-\($0.volume)" } ?? ""
+        let key = "\(c.kind.rawValue)|\(c.length)|\(candles.count)|\(candles.first?.time ?? 0)|\(last)"
+        if let hit = seriesCache[c.id], hit.key == key { return (hit.a, hit.b, hit.c) }
+        let closes = candles.map(\.close)
+        var a: [Double?] = [], b: [Double?] = [], d: [Double?] = []
+        switch c.kind {
+        case .ema: a = IndicatorMath.ema(closes, length: c.length)
+        case .sma: a = IndicatorMath.sma(closes, length: c.length)
+        case .vwap: a = IndicatorMath.vwap(candles)
+        case .rsi: a = IndicatorMath.rsi(closes, length: c.length)
+        case .bollinger:
+            let bb = IndicatorMath.bollinger(closes, length: c.length)
+            a = bb.mid; b = bb.upper; d = bb.lower
+        case .volume: a = candles.map { Optional($0.volume) }
+        }
+        seriesCache[c.id] = (key, a, b, d)
+        return (a, b, d)
+    }
+
+    fileprivate func strokeSeries(_ v: [Double?], color col: NSColor, width: CGFloat, dash: [CGFloat]? = nil, yMap: (Double) -> CGFloat) {
+        guard let vis = visibleIndices(), !v.isEmpty else { return }
+        let lo = max(vis.lowerBound - 1, 0), hi = min(vis.upperBound + 1, v.count - 1)
+        guard lo <= hi else { return }
+        let path = NSBezierPath()
+        var started = false
+        for i in lo...hi {
+            guard let val = v[i] else { started = false; continue }
+            let pt = CGPoint(x: x(index: Double(i)), y: yMap(val))
+            if started { path.line(to: pt) } else { path.move(to: pt); started = true }
+        }
+        path.lineWidth = width
+        path.lineJoinStyle = .round
+        if let dash { path.setLineDash(dash, count: dash.count, phase: 0) }
+        col.setStroke()
+        path.stroke()
+    }
+
+    fileprivate func drawOverlayIndicators() {
+        for c in indicators where c.visible && c.kind.placement == .overlay {
+            let s = series(c)
+            let col = color(c.color)
+            let w = CGFloat(c.width)
+            if c.kind == .bollinger {
+                // Band fill between upper and lower.
+                if let vis = visibleIndices(), max(vis.lowerBound - 1, 0) <= min(vis.upperBound + 1, s.b.count - 1) {
+                    let idx = Array(max(vis.lowerBound - 1, 0)...min(vis.upperBound + 1, s.b.count - 1)).filter { s.b[$0] != nil && $0 < s.c.count && s.c[$0] != nil }
+                    if idx.count > 1 {
+                        let band = NSBezierPath()
+                        band.move(to: CGPoint(x: x(index: Double(idx[0])), y: y(s.b[idx[0]]!)))
+                        for i in idx.dropFirst() { band.line(to: CGPoint(x: x(index: Double(i)), y: y(s.b[i]!))) }
+                        for i in idx.reversed() { band.line(to: CGPoint(x: x(index: Double(i)), y: y(s.c[i]!))) }
+                        band.close()
+                        col.withAlphaComponent(0.06).setFill()
+                        band.fill()
+                    }
+                }
+                strokeSeries(s.b, color: col, width: w) { self.y($0) }
+                strokeSeries(s.c, color: col, width: w) { self.y($0) }
+                strokeSeries(s.a, color: col.withAlphaComponent(0.7), width: max(w - 0.5, 0.5), dash: [4, 3]) { self.y($0) }
+            } else {
+                strokeSeries(s.a, color: col, width: w) { self.y($0) }
+            }
+        }
+    }
+
+    /// Indicator strips under the price chart (RSI …).
+    fileprivate func drawPanes() {
+        for (c, r) in paneRects() {
+            Palette.line.setStroke()
+            hline(align(r.minY) + 0.5 / pixelRatio, from: 0, to: bounds.maxX, width: 1)
+            guard !c.collapsed, r.height > 30 else { continue }
+            let inner = r.insetBy(dx: 0, dy: 8)
+            let yv = { (v: Double) -> CGFloat in inner.minY + CGFloat((100 - v) / 100) * inner.height }
+            NSGraphicsContext.saveGraphicsState()
+            NSBezierPath(rect: NSRect(x: r.minX, y: r.minY + 1, width: r.width, height: r.height - 1)).addClip()
+            color(c.color).withAlphaComponent(0.05).setFill()
+            NSRect(x: r.minX, y: yv(70), width: r.width, height: yv(30) - yv(70)).fill()
+            Palette.muted.withAlphaComponent(0.35).setStroke()
+            hline(align(yv(70)) + 0.5 / pixelRatio, from: r.minX, to: r.maxX, width: 1, dash: [3, 3])
+            hline(align(yv(30)) + 0.5 / pixelRatio, from: r.minX, to: r.maxX, width: 1, dash: [3, 3])
+            strokeSeries(series(c).a, color: color(c.color), width: CGFloat(c.width), yMap: yv)
+            NSGraphicsContext.restoreGraphicsState()
+            let f = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+            text("70", at: CGPoint(x: r.maxX + 9, y: yv(70)), font: f, color: Palette.dim, align: .left)
+            text("30", at: CGPoint(x: r.maxX + 9, y: yv(30)), font: f, color: Palette.dim, align: .left)
+        }
+    }
+
+    /// Candle under the mouse, or the newest one.
+    fileprivate var focusIndex: Int? {
+        guard !candles.isEmpty else { return nil }
+        if let m = mouse, m.x < plot.maxX, m.y < timeTop { return Int(min(max(index(x: m.x).rounded(), 0), Double(candles.count - 1))) }
+        return candles.count - 1
+    }
+
+    fileprivate func valueText(_ c: IndicatorConfig, _ i: Int) -> String {
+        let s = series(c)
+        func at(_ v: [Double?]) -> Double? { i < v.count ? v[i] : nil }
+        switch c.kind {
+        case .volume: return at(s.a).map { compact($0) } ?? "–"
+        case .rsi: return at(s.a).map { Fmt.number($0, decimals: 1) } ?? "–"
+        case .bollinger:
+            guard let u = at(s.b), let l = at(s.c) else { return "–" }
+            return "\(Fmt.price(u)) / \(Fmt.price(l))"
+        default: return at(s.a).map { Fmt.price($0) } ?? "–"
+        }
+    }
+
+    /// Current value of each line indicator as a small colored tag on the price axis.
+    fileprivate func drawIndicatorAxisTags() {
+        guard let i = focusIndex else { return }
+        for c in indicators where c.visible && (c.kind == .ema || c.kind == .sma || c.kind == .vwap) {
+            let s = series(c)
+            guard i < s.a.count, let v = s.a[i] else { continue }
+            let yy = y(v)
+            guard yy > plot.minY + 8, yy < plot.maxY - 8 else { continue }
+            axisTag(v, at: yy, bg: color(c.color), fg: Palette.bg)
+        }
+    }
+
+    fileprivate func drawPaneLabels() {
+        paneLabelRects = []
+        let i = focusIndex
+        for (c, r) in paneRects() {
+            let label = "\(c.collapsed ? "▸" : "▾") \(c.shortName)  \(i.map { valueText(c, $0) } ?? "")"
+            let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+            let w = (label as NSString).size(withAttributes: [.font: font]).width
+            let rect = NSRect(x: r.minX + 8, y: r.minY + 2, width: w + 8, height: 16)
+            text(label, at: CGPoint(x: rect.minX + 4, y: rect.midY), font: font, color: color(c.color), align: .left)
+            paneLabelRects.append((c.id, rect))
+        }
+    }
+
+    /// Indicator chips after the OHLC line: dot + short name; on hover the value, ⚙ and ✕.
+    fileprivate func drawIndicatorChips(startX: CGFloat, y yy: CGFloat, index i: Int) {
+        chipRects = []
+        chipFullRects = [:]
+        legendToggleRect = nil
+        guard !indicators.isEmpty else { return }
+        let font = NSFont.systemFont(ofSize: 11.5, weight: .medium)
+        let mono = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+        func width(_ s: String, _ f: NSFont) -> CGFloat { (s as NSString).size(withAttributes: [.font: f]).width }
+        var cx = startX
+        var cy = yy
+        if legendCollapsed {
+            let s = "ƒx \(indicators.count) ›"
+            let r = NSRect(x: cx - 6, y: cy - 9, width: width(s, font) + 12, height: 18)
+            Palette.card.withAlphaComponent(0.85).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5).fill()
+            text(s, at: CGPoint(x: r.minX + 6, y: cy), font: font, color: Palette.muted, align: .left)
+            legendToggleRect = r
+            return
+        }
+        for c in indicators {
+            let col = color(c.color)
+            let hovered = hoveredChip == c.id
+            let nameW = width(c.shortName, font)
+            let value = hovered ? valueText(c, i) : ""
+            let extra: CGFloat = hovered ? 8 + width(value, mono) + 10 + 14 + 6 + 14 : 0
+            let w = 8 + 5 + nameW + extra
+            if cx + w > plot.maxX - 30 { cx = plot.minX + 12; cy += 20 }
+            let full = NSRect(x: cx - 5, y: cy - 9, width: w + 10, height: 18)
+            if hovered {
+                Palette.card.withAlphaComponent(0.95).setFill()
+                NSBezierPath(roundedRect: full, xRadius: 5, yRadius: 5).fill()
+                Palette.line.setStroke()
+                NSBezierPath(roundedRect: full, xRadius: 5, yRadius: 5).stroke()
+            }
+            let dot = NSRect(x: cx, y: cy - 4, width: 8, height: 8)
+            if c.visible {
+                col.setFill(); NSBezierPath(ovalIn: dot).fill()
+            } else {
+                Palette.dim.setStroke(); let o = NSBezierPath(ovalIn: dot.insetBy(dx: 0.75, dy: 0.75)); o.lineWidth = 1.5; o.stroke()
+            }
+            text(c.shortName, at: CGPoint(x: cx + 13, y: cy), font: font, color: c.visible ? Palette.text : Palette.dim, align: .left)
+            chipRects.append((c.id, NSRect(x: full.minX, y: full.minY, width: 13 + nameW + 8, height: 18), .toggle))
+            if hovered {
+                var px = cx + 13 + nameW + 8
+                text(value, at: CGPoint(x: px, y: cy), font: mono, color: col, align: .left)
+                px += width(value, mono) + 10
+                text("⚙", at: CGPoint(x: px + 7, y: cy), font: .systemFont(ofSize: 12), color: Palette.muted, align: .center)
+                chipRects.append((c.id, NSRect(x: px, y: full.minY, width: 14, height: 18), .gear))
+                px += 20
+                text("✕", at: CGPoint(x: px + 7, y: cy), font: .systemFont(ofSize: 11, weight: .semibold), color: Palette.muted, align: .center)
+                chipRects.append((c.id, NSRect(x: px, y: full.minY, width: 14, height: 18), .remove))
+            }
+            chipFullRects[c.id] = full
+            cx += w + 16
+        }
+        let s = "‹"
+        let r = NSRect(x: cx - 6, y: cy - 9, width: 16, height: 18)
+        text(s, at: CGPoint(x: r.midX, y: cy), font: .systemFont(ofSize: 13, weight: .semibold), color: Palette.dim, align: .center)
+        legendToggleRect = r
+    }
+
+    fileprivate func updateChipHover(_ p: CGPoint) {
+        if let id = hoveredChip, let r = chipFullRects[id], r.insetBy(dx: -2, dy: -2).contains(p) { return }
+        hoveredChip = chipFullRects.first { $0.value.contains(p) }?.key
+    }
+
+    fileprivate func isOverLegend(_ p: CGPoint) -> Bool {
+        chipFullRects.values.contains { $0.contains(p) } || (legendToggleRect?.contains(p) ?? false) || paneLabelRects.contains { $0.rect.contains(p) }
+    }
+
+    /// Clicks on chips, ⚙, ✕, the fold arrow or a pane name. Returns true when handled.
+    fileprivate func handleLegendClick(at p: CGPoint) -> Bool {
+        if let r = legendToggleRect, r.contains(p) { onLegendCollapse?(!legendCollapsed); return true }
+        // ⚙ and ✕ first (they sit inside the chip).
+        for chip in chipRects.reversed() where chip.rect.contains(p) {
+            switch chip.part {
+            case .toggle: onIndicatorToggle?(chip.id)
+            case .remove: hoveredChip = nil; onIndicatorRemove?(chip.id)
+            case .gear:
+                if let vc = makeIndicatorSettings?(chip.id) {
+                    let pop = NSPopover()
+                    pop.behavior = .transient
+                    pop.contentViewController = vc
+                    pop.show(relativeTo: chip.rect, of: self, preferredEdge: .maxY)
+                }
+            }
+            return true
+        }
+        for pane in paneLabelRects where pane.rect.contains(p) { onPaneCollapse?(pane.id); return true }
+        return false
+    }
+}
+
 #endif
 
 #if os(macOS)
@@ -1513,7 +1785,7 @@ extension ChartCanvas {
     }
 
     func demoTimeAxisPoint(xFraction: CGFloat) -> CGPoint {
-        convert(CGPoint(x: plot.minX + plot.width * xFraction, y: plot.maxY + timeHeight / 2), to: nil)
+        convert(CGPoint(x: plot.minX + plot.width * xFraction, y: timeTop + timeHeight / 2), to: nil)
     }
 
     /// Number of bars currently visible left of the newest candle.

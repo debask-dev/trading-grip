@@ -308,6 +308,9 @@ final class AppState: ObservableObject {
     /// Stop / take-profit fields show % from the entry instead of a price.
     @Published var stopInPct: Bool = UserDefaults.standard.bool(forKey: "stopInPct") { didSet { defaults.set(stopInPct, forKey: "stopInPct") } }
     @Published var tpInPct: Bool = UserDefaults.standard.bool(forKey: "tpInPct") { didSet { defaults.set(tpInPct, forKey: "tpInPct") } }
+    /// Chart indicators (volume first). Shown as chips next to the OHLC line.
+    @Published var indicators: [IndicatorConfig] = AppState.loadIndicators() { didSet { saveJSON(indicators, "indicators") } }
+    @Published var legendCollapsed: Bool = UserDefaults.standard.bool(forKey: "legendCollapsed") { didSet { defaults.set(legendCollapsed, forKey: "legendCollapsed") } }
     @Published var showMoreOptions: Bool = UserDefaults.standard.bool(forKey: "showMoreOptions") { didSet { defaults.set(showMoreOptions, forKey: "showMoreOptions") } }
     @Published var quickUsd: Double = UserDefaults.standard.object(forKey: "quickUsd") as? Double ?? 1000 { didSet { defaults.set(quickUsd, forKey: "quickUsd") } }
     @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 { didSet { defaults.set(quickLev, forKey: "quickLev") } }
@@ -403,6 +406,13 @@ final class AppState: ObservableObject {
 
     private func saveJSON<T: Encodable>(_ v: T, _ key: String) {
         if !isDemoVideo, let d = try? JSONEncoder().encode(v) { defaults.set(d, forKey: key) }
+    }
+
+    /// Saved indicators; older versions only had the volume switch in the chart style.
+    private static func loadIndicators() -> [IndicatorConfig] {
+        if let saved = loadJSON([IndicatorConfig].self, "indicators") { return saved }
+        let style = loadJSON(ChartStyle.self, "chartStyle")
+        return [IndicatorConfig(kind: .volume, visible: style?.showVolume ?? true)]
     }
 
     private static func loadJSON<T: Decodable>(_ t: T.Type, _ key: String) -> T? {
@@ -1080,6 +1090,35 @@ final class AppState: ObservableObject {
         trendlines.append(line)
         selectedTrendline = line.id
         saveTrendlines()
+    }
+
+    // MARK: Indicators
+
+    func addIndicator(_ kind: IndicatorKind) {
+        var c = IndicatorConfig(kind: kind)
+        // A second EMA/SMA gets a longer length and another color, so 50 + 200 is two clicks.
+        let same = indicators.filter { $0.kind == kind }
+        if !same.isEmpty && (kind == .ema || kind == .sma) {
+            c.length = same.contains { $0.length == 200 } ? 100 : 200
+            c.color = ["#5AA2FF", "#FF8A65", "#81C784", "#F06292"][same.count % 4]
+        }
+        if kind == .volume, let i = indicators.firstIndex(where: { $0.kind == .volume }) { indicators[i].visible = true; return }
+        indicators.append(c)
+        legendCollapsed = false
+    }
+
+    func toggleIndicator(_ id: UUID) {
+        if let i = indicators.firstIndex(where: { $0.id == id }) { indicators[i].visible.toggle() }
+    }
+
+    func removeIndicator(_ id: UUID) { indicators.removeAll { $0.id == id } }
+
+    func togglePaneCollapsed(_ id: UUID) {
+        if let i = indicators.firstIndex(where: { $0.id == id }) { indicators[i].collapsed.toggle() }
+    }
+
+    func updateIndicator(_ c: IndicatorConfig) {
+        if let i = indicators.firstIndex(where: { $0.id == c.id }) { indicators[i] = c }
     }
 
     func toggleTool(_ t: ChartTool) { tool = tool == t ? .cursor : t }

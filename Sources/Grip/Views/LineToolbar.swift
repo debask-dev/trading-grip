@@ -145,7 +145,12 @@ struct ChartSettingsView: View {
 
             Section("Chart") {
                 Toggle("Rasterlijnen", isOn: $state.chartStyle.showGrid)
-                Toggle("Volume", isOn: $state.chartStyle.showVolume)
+                Toggle("Volume", isOn: Binding(
+                    get: { state.indicators.contains { $0.kind == .volume && $0.visible } },
+                    set: { on in
+                        if let i = state.indicators.firstIndex(where: { $0.kind == .volume }) { state.indicators[i].visible = on }
+                        else if on { state.addIndicator(.volume) }
+                    }))
                 Picker("Koop/verkoop-markeringen", selection: $state.markerDays) {
                     Text("Uit").tag(0)
                     Text("Alleen huidige trade").tag(-1)

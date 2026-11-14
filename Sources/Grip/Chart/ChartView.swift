@@ -40,6 +40,8 @@ struct ChartView: NSViewRepresentable {
         set(\.tool, s.tool)
         set(\.hasPosition, s.position != nil)
         set(\.isLoading, s.loadingCandles)
+        set(\.indicators, s.indicators)
+        set(\.legendCollapsed, s.legendCollapsed)
         if v.lastPrice <= 0 { v.lastPrice = s.price }
         let labelKey = "\(s.hideAmounts)|\(s.ticket.map { "\($0)" } ?? "")|\(s.position.map { "\($0.size)|\($0.entryPx)" } ?? "")|\(s.riskPercent)|\(s.account.accountValue)"
         set(\.labelKey, labelKey)
@@ -59,6 +61,13 @@ struct ChartView: NSViewRepresentable {
         v.onLineClose = { id in s.lineClosed(id) }
         v.onTradeSelect = { id in s.highlightTradeID = id }
         v.priceMenuItems = { px in s.priceMenu(at: px) }
+        v.onIndicatorToggle = { id in s.toggleIndicator(id) }
+        v.onIndicatorRemove = { id in s.removeIndicator(id) }
+        v.onPaneCollapse = { id in s.togglePaneCollapsed(id) }
+        v.onLegendCollapse = { c in s.legendCollapsed = c }
+        v.makeIndicatorSettings = { id in
+            NSHostingController(rootView: IndicatorSettingsView(id: id).environmentObject(s).preferredColorScheme(.dark))
+        }
         if dirty { v.needsDisplay = true }
     }
 }

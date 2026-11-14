@@ -357,6 +357,18 @@ struct ChartHeader: View {
                 ToolButton(icon: "ruler", active: state.tool == .measure, help: "Meten: klik begin en eind · of ⇧-klik in de chart") {
                     state.toggleTool(.measure)
                 }
+                Menu {
+                    ForEach(IndicatorKind.allCases, id: \.self) { k in
+                        Button(k.title) { state.addIndicator(k) }
+                            .disabled(k == .volume && state.indicators.contains { $0.kind == .volume && $0.visible })
+                    }
+                } label: {
+                    Text("ƒx").font(.system(size: 13, weight: .semibold, design: .serif)).italic()
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Indicator toevoegen")
                 if !state.coinTrendlines.isEmpty {
                     Menu {
                         Button("Wis alle lijnen voor \(state.coin)", role: .destructive) { state.clearTrendlines() }
