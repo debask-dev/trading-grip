@@ -71,6 +71,21 @@ struct Ticket: Equatable {
     var takeProfit: Double? { tps.first?.price }
 }
 
+struct HourStats: Equatable {
+    var change: Double
+    var high: Double
+    var low: Double
+    var volume: Double
+    var volumeUsd: Double
+}
+
+struct Toast: Identifiable, Equatable {
+    enum Kind { case info, success, error }
+    let id = UUID()
+    var text: String
+    var kind: Kind
+}
+
 enum LineID: Hashable {
     case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, order(Int64), position, breakEven, liquidation
 }
