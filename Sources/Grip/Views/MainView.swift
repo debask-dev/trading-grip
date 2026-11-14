@@ -370,9 +370,12 @@ struct ChartHeader: View {
             }
 
             Divider().frame(height: 22)
+            // Takes what is left and drops items that do not fit, so the header never pushes the window wider.
             MarketStats()
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(-1)
+                .clipped()
 
-            Spacer()
             if state.loadingCandles { ProgressView().controlSize(.small) }
             HStack(spacing: 4) {
                 ToolButton(icon: "camera", active: false, help: "Screenshot van de chart (⇧⌘S) – bewaard in \((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)") {
