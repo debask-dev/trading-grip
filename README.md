@@ -43,11 +43,15 @@
 2. Pak uit en sleep **Grip.app** naar *Programma's*.
 3. Eerste keer openen: **rechtsklik → Open**. Of ga naar *Systeeminstellingen → Privacy en beveiliging → Toch openen*. De app is niet door Apple genotariseerd, daarom vraagt macOS dit één keer.
 
-## Eerste keer instellen
+## Account koppelen
 
-1. *Instellingen* (⌘,) → kies **Testnet** of **Mainnet**.
-2. Vul het **adres van je wallet** in (alleen-lezen: saldo, posities, historie).
-3. Maak op Hyperliquid een API-wallet aan (*More → API*) en plak de **private key van die API-wallet** in Grip. Gebruik nooit de key van je hoofdwallet.
+Klik rechtsboven op **ACCOUNT KOPPELEN** (of ⇧⌘A). In het accountscherm:
+1. Kies **Testnet** of **Mainnet**.
+2. Vul het **adres van je hoofdwallet** in (alleen-lezen: saldo, posities, historie).
+3. Optioneel, om te handelen: maak op Hyperliquid een **API-wallet** aan (*More → API*) en plak de private key. Gebruik nooit de key van je hoofdwallet.
+4. Klik **Test verbinding**. Grip controleert stap voor stap of alles klopt en zegt precies wat er mis is (bijv. API-wallet niet goedgekeurd, verkeerd netwerk, verlopen). Daarna **Opslaan en gebruiken**.
+
+Adressen worden ingekort getoond; de private key is na het opslaan nooit meer zichtbaar en staat alleen in de macOS-sleutelhanger. Je kunt meerdere accounts toevoegen en wisselen.
 
 ## Sneltoetsen
 
@@ -62,6 +66,7 @@
 | Chart verschuiven / zoomen | ← → / ↑ ↓ |
 | Chart resetten | ⌥R |
 | Alle sneltoetsen | ⌘/ |
+| Accountscherm | ⇧⌘A |
 | Meten | ⇧ + klik, klik |
 | Timeframe | ⌘1 … ⌘7 |
 | Traden / Historie / Portfolio | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 |

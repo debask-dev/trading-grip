@@ -17,18 +17,41 @@ struct SettingsView: View {
 
 struct AccountSettingsView: View {
     @EnvironmentObject var state: AppState
-    @State private var keyInput = ""
-    @State private var keyMessage: String?
-    @State private var keyError = false
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Form {
-            Section("Netwerk") {
-                Picker("Netwerk", selection: $state.network) {
-                    ForEach(HLNetwork.allCases) { Text($0.label).tag($0) }
+            Section {
+                if let a = state.activeAccount {
+                    HStack(spacing: 12) {
+                        ExchangeIcon(kind: a.exchange).frame(width: 30, height: 30)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(a.label).font(.system(size: 13, weight: .semibold))
+                            HStack(spacing: 6) {
+                                NetworkPill(network: a.network)
+                                Text(Credentials.mask(a.address)).font(.system(.caption, design: .monospaced)).foregroundStyle(Theme.muted)
+                                Text(a.canTrade ? "· handelen" : "· alleen-lezen").font(.caption).foregroundStyle(Theme.muted)
+                            }
+                        }
+                        Spacer()
+                        StatusDot(ok: a.lastCheckOK)
+                    }
+                } else {
+                    Text(state.paperMode ? "Geen account gekoppeld – je zit in de oefenmodus." : "Nog geen account gekoppeld.")
+                        .foregroundStyle(Theme.muted)
                 }
-                if state.network == .mainnet {
-                    Label("Je handelt met echt geld.", systemImage: "exclamationmark.triangle.fill").foregroundStyle(Theme.orange)
+                Button(state.accounts.isEmpty ? "Account koppelen…" : "Accounts beheren…") { openWindow(id: "accounts") }
+            } header: {
+                Text("Account")
+            } footer: {
+                Text("Koppelen, testen en wisselen van account gaat in het accountscherm (⇧⌘A).")
+            }
+
+            if state.activeAccount == nil {
+                Section("Koersen") {
+                    Picker("Koersen van", selection: $state.network) {
+                        ForEach(HLNetwork.allCases) { Text($0.isMainnet ? "Mainnet" : "Testnet").tag($0) }
+                    }
                 }
             }
 
@@ -46,50 +69,7 @@ struct AccountSettingsView: View {
             } header: {
                 Text("Oefenmodus")
             } footer: {
-                Text("Handel met nepgeld tegen live koersen van Hyperliquid. Orders, fills, fees, historie en portfolio worden lokaal gesimuleerd. Geen wallet of sleutels nodig.")
-            }
-
-            Section {
-                TextField("Wallet-adres (0x…)", text: $state.accountAddress)
-                    .font(.system(.body, design: .monospaced))
-                if !state.accountAddress.isEmpty && !state.hasAccount {
-                    Text("Dit lijkt geen geldig adres (0x + 40 tekens).").font(.caption).foregroundStyle(Theme.red)
-                }
-            } header: {
-                Text("Account")
-            } footer: {
-                Text("Het adres van je hoofdwallet waarmee je op Hyperliquid inlogt. Alleen-lezen: hiermee toont Grip saldo, posities en historie.")
-            }
-
-            Section {
-                if let addr = state.agentAddress {
-                    LabeledContent("API-wallet") { Text(addr).font(.system(.caption, design: .monospaced)).textSelection(.enabled) }
-                    Button("API-wallet verwijderen", role: .destructive) { state.removeAgentKey(); keyMessage = nil }
-                } else {
-                    SecureField("Private key van je API-wallet", text: $keyInput)
-                        .font(.system(.body, design: .monospaced))
-                    Button("Opslaan in sleutelhanger") {
-                        do {
-                            let a = try state.saveAgentKey(keyInput)
-                            keyMessage = "Opgeslagen. API-wallet: \(a)"
-                            keyError = false
-                            keyInput = ""
-                        } catch {
-                            keyMessage = error.localizedDescription
-                            keyError = true
-                        }
-                    }
-                    .disabled(keyInput.isEmpty)
-                }
-                if let m = keyMessage { Text(m).font(.caption).foregroundStyle(keyError ? Theme.red : Theme.green) }
-            } header: {
-                Text("Handelen (\(state.network == .mainnet ? "mainnet" : "testnet"))")
-            } footer: {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Gebruik een **API-wallet** (Hyperliquid → More → API), niet de key van je hoofdwallet. Een API-wallet kan handelen maar **geen geld opnemen**.")
-                    Text("De key wordt alleen in de macOS-sleutelhanger bewaard en verlaat je Mac nooit, behalve als handtekening op je orders.")
-                    Link("API-wallet aanmaken op Hyperliquid", destination: URL(string: state.network == .mainnet ? "https://app.hyperliquid.xyz/API" : "https://app.hyperliquid-testnet.xyz/API")!)
-                }
+                Text("Handel met nepgeld tegen live koersen van Hyperliquid. Orders, fills, fees, historie en portfolio worden lokaal gesimuleerd.")
             }
 
             Section("Trading") {
@@ -113,6 +93,7 @@ struct AccountSettingsView: View {
 struct OnboardingView: View {
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -124,10 +105,9 @@ struct OnboardingView: View {
                 }
             }
             VStack(alignment: .leading, spacing: 12) {
-                Step(n: 1, text: "Kies **Testnet** om veilig te oefenen (standaard), of Mainnet voor echt geld.")
-                Step(n: 2, text: "Vul het **adres van je wallet** in. Daarmee ziet Grip je saldo, posities en historie.")
-                Step(n: 3, text: "Maak op Hyperliquid een **API-wallet** aan (More → API) en plak de private key in Grip. Die kan handelen maar nooit geld opnemen, en staat alleen in je sleutelhanger.")
-                Step(n: 4, text: "Klik **Long** of **Short**, sleep entry, stop-loss en take-profit in de chart, kies je risico. Klaar.")
+                Step(n: 1, text: "**Koppel je Hyperliquid-account**: kies Testnet of Mainnet, vul je wallet-adres in en (om te handelen) een API-wallet. Grip test alles voordat je opslaat.")
+                Step(n: 2, text: "Of probeer eerst de **oefenmodus**: nepgeld, live koersen, geen sleutels nodig.")
+                Step(n: 3, text: "Klik **Long** of **Short**, sleep entry, stop-loss en take-profit in de chart en kies je risico. Klaar.")
             }
             Text("Zonder account kun je de charts, trendlijnen en de risicocalculator gewoon gebruiken.")
                 .font(.system(size: 12)).foregroundStyle(Theme.dim)
@@ -135,9 +115,8 @@ struct OnboardingView: View {
                 Button("Later") { dismiss() }
                 Button("Probeer de oefenmodus") { state.paperMode = true; dismiss() }
                 Spacer()
-                SettingsLink { Text("Instellingen openen") }
+                Button("Account koppelen") { dismiss(); openWindow(id: "accounts") }
                     .buttonStyle(.borderedProminent)
-                    .simultaneousGesture(TapGesture().onEnded { dismiss() })
             }
         }
         .padding(28)

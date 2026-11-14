@@ -68,7 +68,7 @@ struct RiskCard: View {
                 Text("Oefenmodus – live koersen, gesimuleerde orders. Uitzetten in Instellingen.")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.accent)
             } else if state.isExampleEquity {
-                Text("Voorbeeld met $10.000 – koppel je account in Instellingen voor je echte saldo.")
+                Text("Voorbeeld met $10.000 – koppel je account (⇧⌘A) voor je echte saldo.")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
             }
         }
@@ -158,7 +158,7 @@ struct TicketCard: View {
                 .keyboardShortcut(.return, modifiers: .command)
             }
             if !state.canTrade {
-                Text("Om te handelen: voeg je wallet-adres en API-wallet toe in Instellingen.")
+                Text("Om te handelen: koppel een account met API-wallet (⇧⌘A).")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
             }
         }

@@ -32,7 +32,7 @@ struct PortfolioView: View {
                 }
 
                 if !state.hasAccount {
-                    EmptyState(icon: "chart.xyaxis.line", text: "Koppel je wallet-adres in Instellingen om je portfolio te zien.")
+                    EmptyState(icon: "chart.xyaxis.line", text: "Koppel je account (klik rechtsboven op ACCOUNT KOPPELEN of ⇧⌘A) om je portfolio te zien.")
                         .frame(height: 300)
                 } else {
                     HStack(spacing: 12) {

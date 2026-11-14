@@ -75,6 +75,10 @@ final class AppState: ObservableObject {
     /// Appearance for new trendlines; follows the last change made in the line toolbar.
     @Published var lineAppearance: LineAppearance { didSet { saveJSON(lineAppearance, "lineAppearance") } }
     @Published private(set) var agentAddress: String?
+    /// Connected exchange accounts (public info only; keys are in the Keychain).
+    @Published var accounts: [ExchangeAccount] = [] { didSet { saveJSON(accounts, "accounts") } }
+    @Published var activeAccountID: UUID? { didSet { if !isDemoVideo { defaults.set(activeAccountID?.uuidString, forKey: "activeAccountID") } } }
+    @Published var securityNotice: String?
     /// Oefenmodus: live prices, simulated orders and balance (no keys needed).
     @Published var paperMode: Bool {
         didSet {
@@ -146,9 +150,22 @@ final class AppState: ObservableObject {
 
     init() {
         // The demo recording uses live mainnet prices (read-only) with simulated orders.
-        let net = UserDefaults.standard.bool(forKey: "GripDemoVideo") ? .mainnet : (HLNetwork(rawValue: defaults.string(forKey: "network") ?? "") ?? .testnet)
+        let demoRun = UserDefaults.standard.bool(forKey: "GripDemoVideo")
+        let storedNet = HLNetwork(rawValue: UserDefaults.standard.string(forKey: "network") ?? "") ?? .testnet
+        let loaded = demoRun ? (accounts: [ExchangeAccount](), active: UUID?.none, notice: String?.none) : Self.loadAccounts(network: storedNet)
+        let activeAcct = loaded.accounts.first { $0.id == loaded.active }
+        let net = demoRun ? .mainnet : (activeAcct?.network ?? storedNet)
         network = net
-        accountAddress = defaults.string(forKey: "accountAddress") ?? ""
+        if let a = activeAcct {
+            accountAddress = a.address
+        } else if case .address(let a) = Credentials.classify(UserDefaults.standard.string(forKey: "accountAddress") ?? "") {
+            accountAddress = a
+        } else {
+            accountAddress = ""
+        }
+        accounts = loaded.accounts
+        activeAccountID = loaded.active
+        securityNotice = loaded.notice
         riskPercent = defaults.object(forKey: "riskPercent") as? Double ?? 1.0
         slippagePercent = defaults.object(forKey: "slippagePercent") as? Double ?? 1.0
         useCrossMargin = defaults.object(forKey: "useCrossMargin") as? Bool ?? true
@@ -422,24 +439,11 @@ final class AppState: ObservableObject {
 
     // MARK: Keys
 
-    private var keyAccount: String { "agent-\(network.rawValue)" }
+    private var keyAccount: String { activeAccount?.keychainAccount ?? "agent-\(network.rawValue)" }
 
     func loadSigner() throws -> EthSigner {
         guard let key = Keychain.load(account: keyAccount) else { throw HLError.notConfigured }
         return try EthSigner(privateKeyHex: key)
-    }
-
-    @discardableResult
-    func saveAgentKey(_ key: String) throws -> String {
-        let signer = try EthSigner(privateKeyHex: key)
-        try Keychain.save(key.trimmingCharacters(in: .whitespacesAndNewlines), account: keyAccount)
-        agentAddress = signer.address
-        return signer.address
-    }
-
-    func removeAgentKey() {
-        Keychain.delete(account: keyAccount)
-        agentAddress = nil
     }
 
     // MARK: Ticket
@@ -464,7 +468,7 @@ final class AppState: ObservableObject {
         guard let t = ticket, let a = asset, let r = riskResult else { return }
         guard r.size > 0 else { toast("Positie is te klein.", .error); return }
         guard r.notional >= 10 else { toast("Hyperliquid vereist minimaal $10 per order.", .error); return }
-        guard hasAccount else { toast("Stel eerst je wallet-adres in (Instellingen), of zet de oefenmodus aan.", .error); return }
+        guard hasAccount else { toast("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan.", .error); return }
         busy = true
         defer { busy = false }
         do {
@@ -508,7 +512,7 @@ final class AppState: ObservableObject {
 
     private func requireSigner() throws -> EthSigner {
         do { return try loadSigner() } catch {
-            throw HLError.exchange("Voeg eerst je API-wallet toe in Instellingen om te kunnen handelen (of zet de oefenmodus aan).")
+            throw HLError.exchange("Dit account is alleen-lezen. Voeg een API-wallet toe in het accountscherm (⇧⌘A) om te handelen.")
         }
     }
 
@@ -824,6 +828,137 @@ final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             withAnimation(.easeIn(duration: 0.3)) { self?.toasts.removeAll { $0.id == t.id } }
         }
+    }
+}
+// MARK: - Accounts
+
+enum ConnectionStatus: Equatable {
+    case paper, none, readOnly, trading, error(String)
+}
+
+extension AppState {
+    var activeAccount: ExchangeAccount? { accounts.first { $0.id == activeAccountID } }
+
+    var connectionStatus: ConnectionStatus {
+        if paperMode { return .paper }
+        guard activeAccount != nil else { return .none }
+        if let e = accountError { return .error(e) }
+        return agentAddress == nil ? .readOnly : .trading
+    }
+
+    /// Makes an account the one Grip trades with (switches network and address).
+    func activate(_ id: UUID?) {
+        activeAccountID = id
+        guard let a = activeAccount else {
+            accountAddress = ""
+            reloadAgent()
+            return
+        }
+        if paperMode { paperMode = false }
+        if network != a.network { network = a.network }
+        accountAddress = a.address
+        reloadAgent()
+        toast("Actief account: \(a.label)", .success)
+    }
+
+    /// Saves a new or edited account. `key` = API-wallet private key (nil keeps the current one, "" = read-only).
+    func saveAccount(_ account: ExchangeAccount, key: String?) throws {
+        var a = account
+        if let key {
+            let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed.isEmpty {
+                Keychain.delete(account: a.keychainAccount)
+                a.agentAddress = nil
+            } else {
+                let signer = try EthSigner(privateKeyHex: trimmed)
+                try Keychain.save(trimmed, account: a.keychainAccount)
+                a.agentAddress = signer.address
+            }
+        }
+        if let i = accounts.firstIndex(where: { $0.id == a.id }) {
+            accounts[i] = a
+            if activeAccountID == a.id { reloadAgent() }
+        } else {
+            accounts.append(a)
+            activate(a.id)
+        }
+    }
+
+    func removeAccount(_ id: UUID) {
+        guard let a = accounts.first(where: { $0.id == id }) else { return }
+        Keychain.delete(account: a.keychainAccount)
+        accounts.removeAll { $0.id == id }
+        if activeAccountID == id { activate(accounts.first?.id) }
+        toast("Account “\(a.label)” verwijderd (ook de sleutel uit de sleutelhanger).", .info)
+    }
+
+    func renameAccount(_ id: UUID, to label: String) {
+        guard let i = accounts.firstIndex(where: { $0.id == id }) else { return }
+        accounts[i].label = label
+    }
+
+    func reloadAgent() {
+        agentAddress = (try? loadSigner())?.address
+        Task { await refreshAccount() }
+    }
+
+    /// Runs the connection test for an address and (optional) key.
+    func testConnection(network: HLNetwork, address: String, key: String?,
+                        progress: @escaping @Sendable ([CheckStep]) async -> Void) async -> ConnectionReport {
+        let other: HLNetwork = network.isMainnet ? .testnet : .mainnet
+        return await ConnectionTester.run(api: HLClient(network: network), otherNetworkAPI: HLClient(network: other),
+                                          network: network, address: address, agentKey: key, progress: progress)
+    }
+
+    /// Re-tests a saved account with its stored key and remembers the result.
+    func testAccount(_ id: UUID, progress: @escaping @Sendable ([CheckStep]) async -> Void) async -> ConnectionReport? {
+        guard let a = accounts.first(where: { $0.id == id }) else { return nil }
+        let key = Keychain.load(account: a.keychainAccount)
+        let report = await testConnection(network: a.network, address: a.address, key: key, progress: progress)
+        if let i = accounts.firstIndex(where: { $0.id == id }) {
+            accounts[i].lastCheck = Date()
+            accounts[i].lastCheckOK = report.passed
+            if report.agentName != nil { accounts[i].agentName = report.agentName }
+            if report.agentValidUntil != nil { accounts[i].agentValidUntil = report.agentValidUntil }
+        }
+        return report
+    }
+
+    /// Moves settings from version 0.1 (one address + one key per network) to accounts, and removes
+    /// a private key that was pasted into the address field.
+    static func loadAccounts(network net: HLNetwork) -> (accounts: [ExchangeAccount], active: UUID?, notice: String?) {
+        let d = UserDefaults.standard
+        var accounts: [ExchangeAccount] = d.data(forKey: "accounts").flatMap { try? JSONDecoder().decode([ExchangeAccount].self, from: $0) } ?? []
+        var active = d.string(forKey: "activeAccountID").flatMap(UUID.init(uuidString:))
+        var notice: String?
+        let legacy = d.string(forKey: "accountAddress") ?? ""
+        switch Credentials.classify(legacy) {
+        case .privateKey:
+            d.removeObject(forKey: "accountAddress")
+            notice = "In het adresveld stond een private key in plaats van een adres. Grip heeft die verwijderd. Was het de sleutel van je hoofdwallet, zet je geld dan voor de zekerheid over naar een nieuwe wallet. Was het een API-wallet, maak dan een nieuwe aan."
+        case .address(let addr) where accounts.isEmpty:
+            for n in [net] + HLNetwork.allCases.filter({ $0 != net }) {
+                let legacyKey = "agent-\(n.rawValue)"
+                let key = Keychain.load(account: legacyKey)
+                if n != net && key == nil { continue }
+                var acct = ExchangeAccount(network: n, label: "Hyperliquid \(n.isMainnet ? "Mainnet" : "Testnet")", address: addr)
+                if let key, let signer = try? EthSigner(privateKeyHex: key) {
+                    do {
+                        try Keychain.save(key, account: acct.keychainAccount)
+                        Keychain.delete(account: legacyKey)
+                        acct.agentAddress = signer.address
+                    } catch {}
+                }
+                accounts.append(acct)
+            }
+            active = accounts.first?.id
+            if let data = try? JSONEncoder().encode(accounts) { d.set(data, forKey: "accounts") }
+            d.set(active?.uuidString, forKey: "activeAccountID")
+        default:
+            break
+        }
+        if let a = active, !accounts.contains(where: { $0.id == a }) { active = nil }
+        return (accounts, active, notice)
     }
 }
 #endif

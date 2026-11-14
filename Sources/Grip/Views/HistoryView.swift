@@ -55,7 +55,7 @@ struct HistoryView: View {
             }
 
             if !state.hasAccount {
-                EmptyState(icon: "person.crop.circle.badge.questionmark", text: "Koppel je wallet-adres in Instellingen om je tradehistorie te zien.")
+                EmptyState(icon: "person.crop.circle.badge.questionmark", text: "Koppel je account (⇧⌘A) om je tradehistorie te zien.")
             } else if trades.isEmpty {
                 EmptyState(icon: "clock.arrow.circlepath", text: state.loadingHistory ? "Historie laden…" : "Nog geen afgeronde trades in deze periode.")
             } else {

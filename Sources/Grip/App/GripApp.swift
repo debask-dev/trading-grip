@@ -18,6 +18,14 @@ struct GripApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .commands { GripCommands(state: state) }
 
+        Window("Accounts", id: "accounts") {
+            AccountsView()
+                .environmentObject(state)
+                .preferredColorScheme(.dark)
+        }
+        .defaultSize(width: 900, height: 680)
+        .keyboardShortcut("a", modifiers: [.command, .shift])
+
         Settings {
             SettingsView()
                 .environmentObject(state)

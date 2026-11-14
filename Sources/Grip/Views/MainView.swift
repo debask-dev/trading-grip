@@ -44,27 +44,79 @@ struct MainView: View {
         .overlay(alignment: .top) { ToastStack().padding(.top, 10) }
         .sheet(isPresented: $state.showOnboarding) { OnboardingView() }
         .sheet(isPresented: $state.showShortcuts) { ShortcutsView() }
+        .alert("Let op", isPresented: Binding(get: { state.securityNotice != nil }, set: { if !$0 { state.securityNotice = nil } })) {
+            Button("Begrepen") { state.securityNotice = nil }
+        } message: {
+            Text(state.securityNotice ?? "")
+        }
         .task { await state.start() }
     }
 }
 
+/// Toolbar button that shows the connection status and opens the accounts window.
 struct NetworkBadge: View {
     @EnvironmentObject var state: AppState
+    @Environment(\.openWindow) private var openWindow
+    @State private var hovering = false
+
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(state.streamConnected ? Theme.green : Theme.orange).frame(width: 7, height: 7)
-            Text(state.paperMode ? "OEFENEN" : (state.network == .mainnet ? "MAINNET" : "TESTNET"))
-                .font(.system(size: 10.5, weight: .bold))
-                .foregroundStyle(badgeColor)
+        Button { openWindow(id: "accounts") } label: {
+            HStack(spacing: 7) {
+                Circle().fill(dotColor).frame(width: 7, height: 7)
+                Text(title).font(.system(size: 11, weight: .bold)).foregroundStyle(badgeColor)
+                if let sub = subtitle {
+                    Text(sub).font(.system(size: 11, weight: .medium, design: .monospaced)).foregroundStyle(Theme.muted)
+                }
+            }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(badgeColor.opacity(hovering ? 0.24 : 0.14)))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 6).fill(badgeColor.opacity(0.14)))
-        .help(state.streamConnected ? "Live verbonden met Hyperliquid \(state.network.label)" : "Verbinden…")
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(helpText)
+    }
+
+    private var title: String {
+        switch state.connectionStatus {
+        case .paper: return "OEFENEN"
+        case .none: return "ACCOUNT KOPPELEN"
+        default: return state.network.isMainnet ? "MAINNET" : "TESTNET"
+        }
+    }
+
+    private var subtitle: String? {
+        guard let a = state.activeAccount, !state.paperMode else { return nil }
+        return Credentials.mask(a.address)
+    }
+
+    private var dotColor: Color {
+        switch state.connectionStatus {
+        case .trading: return state.streamConnected ? Theme.green : Theme.orange
+        case .readOnly: return Theme.orange
+        case .error: return Theme.red
+        case .paper: return Theme.accent
+        case .none: return Theme.dim
+        }
+    }
+
+    private var helpText: String {
+        switch state.connectionStatus {
+        case .trading: return "Verbonden: handelen werkt. Klik om accounts te beheren."
+        case .readOnly: return "Verbonden, alleen-lezen (geen API-wallet). Klik om er een toe te voegen."
+        case .error(let e): return "Probleem met de verbinding: \(e)"
+        case .paper: return "Oefenmodus: gesimuleerde orders. Klik om een account te koppelen."
+        case .none: return "Koppel je Hyperliquid-account."
+        }
     }
 }
 
 extension NetworkBadge {
-    var badgeColor: Color { state.paperMode ? Theme.accent : (state.network == .mainnet ? Theme.red : Theme.orange) }
+    var badgeColor: Color {
+        if state.paperMode { return Theme.accent }
+        if state.activeAccount == nil { return Theme.blue }
+        return state.network == .mainnet ? Theme.red : Theme.orange
+    }
 }
 
 struct CoinPicker: View {
