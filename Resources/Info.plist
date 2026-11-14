@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>en</string>
+		<string>nl</string>
+	</array>
+	<key>CFBundleAllowMixedLocalizations</key>
+	<true/>
 	<key>CFBundleName</key>
 	<string>Grip</string>
 	<key>CFBundleDisplayName</key>
@@ -19,7 +26,7 @@
 	<key>CFBundleVersion</key>
 	<string>__BUILD__</string>
 	<key>CFBundleDevelopmentRegion</key>
-	<string>nl</string>
+	<string>en</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSApplicationCategoryType</key>

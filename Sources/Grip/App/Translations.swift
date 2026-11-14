@@ -601,5 +601,7 @@ deel	part
 Verbonden	Connected
 verbroken	disconnected
 geopend	opened
+1u	1h
+Open int.	Open int.
 """#
 #endif

@@ -16,6 +16,8 @@ rm -rf dist
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Grip"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist > "$APP/Contents/Info.plist"
+# Empty language folders so macOS shows its own menus (Edit, View, Window) in Dutch or English.
+mkdir -p "$APP/Contents/Resources/en.lproj" "$APP/Contents/Resources/nl.lproj"
 
 # App icon (.icns) from the 1024px PNG
 ICONSET="$(mktemp -d)/AppIcon.iconset"

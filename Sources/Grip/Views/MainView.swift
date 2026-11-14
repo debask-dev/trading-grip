@@ -252,7 +252,7 @@ struct MarketStats: View {
 
     private func stat(_ k: String, _ v: String, _ color: Color = Theme.text) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            Text(k).font(.system(size: 9.5)).foregroundStyle(Theme.dim)
+            Text(T(k)).font(.system(size: 9.5)).foregroundStyle(Theme.dim)
             Text(v).mono(11).foregroundStyle(color)
         }
         .fixedSize()
