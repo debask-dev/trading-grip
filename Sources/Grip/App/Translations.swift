@@ -603,5 +603,10 @@ verbroken	disconnected
 geopend	opened
 1u	1h
 Open int.	Open int.
+SL hele trade  {}  ({})	SL whole trade  {}  ({})
+Hele trade bij stop	Whole trade at stop
+Hele trade bij stop: {} ({} van je account), fees en al gerealiseerde delen meegerekend	Whole trade at stop: {} ({} of your account), fees and already realized parts included
+Gemiddelden	Moving averages
+gem. entry	avg entry
 """#
 #endif

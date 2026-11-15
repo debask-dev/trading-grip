@@ -628,8 +628,11 @@ struct PositionTab: View {
                     KV(T("Grootte · hefboom"), T("\(state.fmt.size(pos.size, coin: state.coin, decimals: state.szDecimals)) · \(pos.leverage)× \(pos.isCross ? "cross" : "isolated")"))
                     KV(T("Gem. entry"), Fmt.price(pos.entryPx), color: Theme.blue)
                     if let be = state.breakEven { KV(T("Break-even"), Fmt.price(be), color: Theme.muted) }
-                    KV(T("Stop-loss"), sl.map { Fmt.price($0.displayPx) } ?? "geen", color: sl == nil ? Theme.orange : Theme.red)
-                    KV(T("Take-profit"), tps.isEmpty ? "geen" : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · "), color: tps.isEmpty ? Theme.muted : Theme.green)
+                    KV(T("Stop-loss"), sl.map { Fmt.price($0.displayPx) } ?? T("geen"), color: sl == nil ? Theme.orange : Theme.red)
+                    if let r = state.resultAtStop(pos) {
+                        KV(T("Hele trade bij stop"), "\(state.fmt.signedUsd(r, decimals: 2)) · \(Fmt.percent(r / eq, decimals: 2))", color: Theme.pnl(r))
+                    }
+                    KV(T("Take-profit"), tps.isEmpty ? T("geen") : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · "), color: tps.isEmpty ? Theme.muted : Theme.green)
                     if let liq = pos.liquidationPx { KV(T("Liquidatie"), Fmt.price(liq), color: Theme.orange) }
                     if let ot, ot.realized != 0 { KV(T("Al gerealiseerd"), state.fmt.signedUsd(ot.realized, decimals: 2), color: Theme.pnl(ot.realized)) }
                 }

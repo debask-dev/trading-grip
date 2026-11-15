@@ -354,9 +354,21 @@ struct ChartHeader: View {
                     state.toggleTool(.measure)
                 }
                 Menu {
-                    ForEach(IndicatorKind.allCases, id: \.self) { k in
-                        Button(T(k.title)) { state.addIndicator(k) }
-                            .disabled(k == .volume && state.indicators.contains { $0.kind == .volume && $0.visible })
+                    Section(T("Gemiddelden")) {
+                        ForEach([9, 21, 50, 100, 200], id: \.self) { n in
+                            Button("EMA \(n)") { state.addIndicator(.ema, length: n) }
+                                .disabled(state.indicators.contains { $0.kind == .ema && $0.length == n })
+                        }
+                        ForEach([20, 50, 200], id: \.self) { n in
+                            Button("SMA \(n)") { state.addIndicator(.sma, length: n) }
+                                .disabled(state.indicators.contains { $0.kind == .sma && $0.length == n })
+                        }
+                    }
+                    Section {
+                        ForEach([IndicatorKind.vwap, .bollinger, .rsi, .volume], id: \.self) { k in
+                            Button(T(k.title)) { state.addIndicator(k) }
+                                .disabled(k == .volume && state.indicators.contains { $0.kind == .volume && $0.visible })
+                        }
                     }
                 } label: {
                     Text(T("ƒx")).font(.system(size: 13, weight: .semibold, design: .serif)).italic()

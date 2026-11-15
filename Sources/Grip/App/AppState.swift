@@ -528,7 +528,7 @@ final class AppState: ObservableObject {
         stream.onUserEvent = { [weak self] in
             Task { @MainActor in
                 await self?.refreshAccount()
-                await self?.refreshHistory()
+                self?.refreshHistorySoon()
             }
         }
         stream.onConnectionChange = { [weak self] ok in
@@ -667,7 +667,7 @@ final class AppState: ObservableObject {
             let newPositions = Dictionary(state.positions.map { ($0.coin, $0.size) }, uniquingKeysWith: { a, _ in a })
             let changed = oldPositions != newPositions || Set(account.openOrders.map(\.oid)) != Set(state.openOrders.map(\.oid))
             if changed && !(account.positions.isEmpty && account.openOrders.isEmpty && previousOrders.isEmpty) {
-                Task { await self.refreshHistory() }
+                refreshHistorySoon()
             }
             for o in state.openOrders where orderKinds[o.oid] == nil {
                 orderKinds[o.oid] = o.isTrigger ? (o.tpsl == .tp ? .takeProfit : .stopLoss) : (o.reduceOnly ? .takeProfit : .limit)
@@ -1037,6 +1037,11 @@ final class AppState: ObservableObject {
             return T("TP\(n > 1 ? "\(i + 1)" : "") · \(pct)%  wacht op entry")
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
+            if let pos = position, o.isTrigger && o.tpsl == .sl {
+                // Stop: what the whole trade ends with if it is hit (realized parts, fees and funding included).
+                let net = tradeResult(pos, at: px)
+                return T("SL hele trade  \(f.signedUsd(net))  (\(Fmt.percent(net / eq, decimals: 2)))")
+            }
             if let pos = position, o.reduceOnly || o.isTrigger {
                 let qty = o.size > 0 ? min(o.size, abs(pos.size)) : abs(pos.size)
                 let pnl = (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1)
@@ -1125,6 +1130,14 @@ final class AppState: ObservableObject {
     }
 
     // MARK: Indicators
+
+    func addIndicator(_ kind: IndicatorKind, length: Int) {
+        var c = IndicatorConfig(kind: kind, length: length)
+        let colors = ["#E5B84C", "#5AA2FF", "#FF8A65", "#81C784", "#F06292", "#C17CFF"]
+        c.color = colors[indicators.filter { $0.kind == .ema || $0.kind == .sma }.count % colors.count]
+        indicators.append(c)
+        legendCollapsed = false
+    }
 
     func addIndicator(_ kind: IndicatorKind) {
         var c = IndicatorConfig(kind: kind)

@@ -119,6 +119,8 @@ struct StatusStrip: View {
         .padding(.horizontal, 12)
         .frame(height: 28)
         .background(Theme.panel)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) { state.dockExpanded.toggle() }
         .overlay(alignment: .top) { Divider().overlay(Theme.line) }
     }
 
@@ -162,6 +164,15 @@ struct PositionRow: View {
                 }
             }
             .frame(width: 170, alignment: .leading)
+            Group {
+                if let r = state.resultAtStop(pos) {
+                    Text(state.fmt.signedUsd(r)).mono(11).foregroundStyle(Theme.pnl(r))
+                        .help(T("Hele trade bij stop: \(state.fmt.signedUsd(r, decimals: 2)) (\(Fmt.percent(r / max(state.account.accountValue, 1), decimals: 2)) van je account), fees en al gerealiseerde delen meegerekend"))
+                } else {
+                    Text("–").foregroundStyle(Theme.dim)
+                }
+            }
+            .frame(width: 70, alignment: .trailing)
             Text(pos.liquidationPx.map { Fmt.price($0) } ?? "–").mono(11).foregroundStyle(Theme.dim).frame(width: 70, alignment: .trailing)
             Spacer(minLength: 4)
             HStack(spacing: 4) {

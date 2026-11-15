@@ -544,7 +544,11 @@ extension AppState {
                 }
             }
             if !step.actions.isEmpty {
-                if let fresh = try? await refreshedState() { account = fresh }
+                if let fresh = try? await refreshedState() {
+                    let before = account.positions.map { "\($0.coin)\($0.size)" }
+                    account = fresh
+                    if before != fresh.positions.map({ "\($0.coin)\($0.size)" }) { refreshHistorySoon() }
+                }
             }
         }
     }

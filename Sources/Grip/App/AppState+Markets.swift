@@ -64,6 +64,25 @@ extension AppState {
                                       funding: o?.funding ?? 0, takerRate: feeRates.taker)
     }
 
+    /// What the whole trade ends with if the price goes to `px` and everything closes there:
+    /// realized parts, fees paid, exit fee and funding included.
+    func tradeResult(_ pos: Position, at px: Double) -> Double {
+        let o = analysis.open[pos.coin]
+        return PositionMath.net(price: px, entry: pos.entryPx, size: pos.size, feesPaid: o?.feesPaid ?? 0,
+                                realized: o?.realized ?? 0, funding: o?.funding ?? 0, takerRate: feeRates.taker)
+    }
+
+    /// Result of the whole trade when its stop is hit (nil = no stop).
+    func resultAtStop(_ pos: Position) -> Double? { stopOrder(pos.coin).map { tradeResult(pos, at: $0.displayPx) } }
+
+    /// Fills can reach the info API a moment after the event: look now and twice more shortly after.
+    func refreshHistorySoon() {
+        Task { await refreshHistory() }
+        for delay in [3.0, 8.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in Task { await self?.refreshHistory() } }
+        }
+    }
+
     /// Open the market and its Positie tab.
     func goToPosition(_ c: String) {
         coin = c

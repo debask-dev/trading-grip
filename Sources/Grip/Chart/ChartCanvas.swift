@@ -158,6 +158,7 @@ final class ChartCanvas: NSView {
     fileprivate var legendToggleRect: NSRect?
     fileprivate var paneLabelRects: [(id: UUID, rect: NSRect)] = []
     fileprivate var hoveredChip: UUID?
+    fileprivate var chipStartX: CGFloat = 0
     fileprivate var seriesCache: [UUID: (key: String, a: [Double?], b: [Double?], c: [Double?])] = [:]
     private var hover: Hover?
     private var commandDown = false
@@ -272,6 +273,7 @@ final class ChartCanvas: NSView {
 
     func resetView() {
         liveLast = nil
+        chipStartX = 0
         stopKinetic()
         zoomTarget = nil
         panRemaining = 0
@@ -820,7 +822,9 @@ final class ChartCanvas: NSView {
             put("\(compact(c.volume)) \(coin)", num, Palette.text, gap: 6)
             put("$" + compact(c.volume * (c.high + c.low + c.close) / 3), num, Palette.muted, gap: 0)
         }
-        drawIndicatorChips(startX: penX + 16, y: yy, index: i)
+        // The chips keep their place: only ever move right, so the OHLC numbers changing under the mouse don't shift them.
+        chipStartX = max(chipStartX, penX + 16)
+        drawIndicatorChips(startX: chipStartX, y: yy, index: i)
     }
 
     // MARK: Executions

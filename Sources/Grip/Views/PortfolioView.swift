@@ -36,8 +36,8 @@ struct PortfolioView: View {
                         .frame(height: 300)
                 } else {
                     HStack(spacing: 12) {
-                        StatTile(title: T("Accountwaarde"), value: f.usd(end))
-                        StatTile(title: T("PnL \(period.label.lowercased())"), value: f.signedUsd(pnlTotal), color: Theme.pnl(pnlTotal))
+                        StatTile(title: T("Accountwaarde"), value: f.usd(end, decimals: abs(end) < 1000 ? 2 : 0))
+                        StatTile(title: T("PnL \(period.label.lowercased())"), value: f.signedUsd(pnlTotal, decimals: abs(pnlTotal) < 100 ? 2 : 0), color: Theme.pnl(pnlTotal))
                         StatTile(title: T("Rendement"), value: Fmt.percent(pnlPct), color: Theme.pnl(pnlPct))
                         StatTile(title: T("Open posities"), value: "\(state.account.positions.count)")
                     }
