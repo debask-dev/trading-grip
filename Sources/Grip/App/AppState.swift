@@ -487,6 +487,19 @@ final class AppState: ObservableObject {
 
     // MARK: Lifecycle
 
+    /// For automated screenshots (-GripDemoPosition YES): a practice long with stop and two take-profits, overview open.
+    private func demoPracticePosition() async {
+        paperMode = true
+        resetPaper(balance: 10_000)
+        newTicket(long: true)
+        ticket?.isMarket = true
+        while (ticket?.tps.count ?? 0) < 2 { addTicketTP() }
+        applySplitPreset([50, 50])
+        await placeTicket()
+        dockExpanded = true
+        dockTab = 0
+    }
+
     func start() async {
         guard !started else { return }
         started = true
@@ -497,7 +510,8 @@ final class AppState: ObservableObject {
         if !hasAccount && !defaults.bool(forKey: "GripSkipOnboarding") { showOnboarding = true }
         await loadMeta()
         await loadCandles()
-        if defaults.bool(forKey: "GripDemoTicket") { newTicket(long: true) }
+        if defaults.bool(forKey: "GripDemoPosition") { await demoPracticePosition() }
+        else if defaults.bool(forKey: "GripDemoTicket") { newTicket(long: true) }
         if isDemoVideo {
             paperChanged()
             let d = DemoDirector(state: self)

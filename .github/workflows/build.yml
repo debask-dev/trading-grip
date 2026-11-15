@@ -52,7 +52,7 @@ jobs:
       - name: Smoke test (launch + screenshots)
         run: |
           mkdir -p smoke && ditto -x -k "dist/Grip-${VERSION}.zip" smoke
-          open smoke/Grip.app --args -GripSkipOnboarding YES -GripDemoTicket YES
+          open smoke/Grip.app --args -GripSkipOnboarding YES -GripDemoPosition YES
           sleep 30
           if ! pgrep -x Grip >/dev/null; then
             echo "::error::Grip is niet blijven draaien na het opstarten"
