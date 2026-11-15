@@ -87,6 +87,11 @@ final class ChartCanvas: NSView {
     /// Price area. Indicator panes (RSI …) sit between it and the time axis.
     private var plot: NSRect { NSRect(x: 0, y: 0, width: max(10, bounds.width - axisWidth), height: max(60, bounds.height - timeHeight - panesTotal)) }
     private var timeTop: CGFloat { bounds.height - timeHeight }
+    /// "Back to now" button, bottom right of the price area. Only there while the newest candle is off screen.
+    private var nowButtonRect: NSRect? {
+        guard !candles.isEmpty, vp.rightOffset < -0.5 else { return nil }
+        return NSRect(x: plot.maxX - 38, y: plot.maxY - 34, width: 28, height: 24)
+    }
     private var autoButtonRect: NSRect { NSRect(x: plot.maxX + (axisWidth - 26) / 2, y: timeTop + 3, width: 26, height: timeHeight - 6) }
     fileprivate var paneHeights: [(config: IndicatorConfig, height: CGFloat)] {
         let full = max(10, bounds.height - timeHeight)
@@ -126,7 +131,7 @@ final class ChartCanvas: NSView {
 
     // MARK: Interaction
     private enum Hover: Equatable {
-        case line(LineID), lineClose(LineID), closeHandle, trendline(UUID), endpoint(UUID, Bool), priceAxis, timeAxis, autoButton, trade(String)
+        case line(LineID), lineClose(LineID), closeHandle, trendline(UUID), endpoint(UUID, Bool), priceAxis, timeAxis, autoButton, nowButton, trade(String)
     }
     private enum Drag {
         case none
@@ -448,6 +453,7 @@ final class ChartCanvas: NSView {
         drawLastPrice()
         drawOrderLines()
         drawAutoButton()
+        drawNowButton()
         // Crosshair, legend and tooltips live on a separate layer: moving the mouse only redraws that.
         overlay.needsDisplay = true
 
@@ -489,7 +495,7 @@ final class ChartCanvas: NSView {
         // Time labels on round local times (every 15 min, hour, 4 h, day …): the same candles keep
         // their label while scrolling, so nothing jumps.
         guard let vis = visibleIndices() else { return }
-        let step = TimeAxis.step(timeframe: timeframe, barSpacing: Double(spacing))
+        let labelStep = TimeAxis.step(timeframe: timeframe, barSpacing: Double(spacing))
         let tfIntraday = timeframe.milliseconds < 86_400_000
         let lo = max(vis.lowerBound - 1, 0), hi = min(vis.upperBound + 1, candles.count - 1)
         // A label at the edge slides out under the price axis instead of popping away.
@@ -500,12 +506,12 @@ final class ChartCanvas: NSView {
             let c = candles[i]
             let date = Date(timeIntervalSince1970: Double(c.time) / 1000)
             let offset = Int64(TimeZone.current.secondsFromGMT(for: date)) * 1000
-            guard TimeAxis.isLabel(time: c.time, step: step, timeframe: timeframe, utcOffset: offset) else { continue }
+            guard TimeAxis.isLabel(time: c.time, step: labelStep, timeframe: timeframe, utcOffset: offset) else { continue }
             if tfIntraday {
                 let midnight = ((c.time + offset) % 86_400_000) == 0
                 timeFormatter.dateFormat = midnight ? "d MMM" : "HH:mm"
             } else {
-                timeFormatter.dateFormat = step >= 182 * 86_400_000 ? "MMM ''yy" : (timeframe == .w1 ? "d MMM ''yy" : "d MMM")
+                timeFormatter.dateFormat = labelStep >= 182 * 86_400_000 ? "MMM ''yy" : (timeframe == .w1 ? "d MMM ''yy" : "d MMM")
             }
             let xx = align(x(index: Double(i))) + 0.5 / pixelRatio
             if style.showGrid && xx > plot.minX && xx < plot.maxX {
@@ -1033,6 +1039,24 @@ final class ChartCanvas: NSView {
         text(hint, at: CGPoint(x: box.midX, y: box.minY + 54), font: .systemFont(ofSize: 11.5, weight: .medium), color: tf == nil ? Palette.red : Palette.muted, align: .center)
     }
 
+    private func drawNowButton() {
+        guard let r = nowButtonRect else { return }
+        let hot = hover == .nowButton
+        (hot ? Palette.accent : Palette.card).withAlphaComponent(hot ? 0.95 : 0.92).setFill()
+        let path = NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6); path.fill()
+        Palette.line.setStroke(); path.lineWidth = 1; path.stroke()
+        text("»", at: CGPoint(x: r.midX, y: r.midY - 1), font: .systemFont(ofSize: 15, weight: .bold), color: hot ? .white : Palette.text, align: .center)
+    }
+
+    /// Scrolls smoothly back to the newest candle (button, End key).
+    func goToNow() {
+        stopKinetic()
+        zoomTarget = nil
+        panRemaining = (vp.rightOffset - ChartViewport.defaultRightOffset) * vp.barSpacing
+        startAnimating()
+        needsDisplay = true
+    }
+
     private func drawAutoButton() {
         let r = autoButtonRect
         let hot = hover == .autoButton
@@ -1070,7 +1094,7 @@ final class ChartCanvas: NSView {
         case .right: origin.x -= size.width
         }
         // On whole pixels: text at a fractional position is blurry and shimmers while scrolling.
-        origin = CGPoint(x: align(origin.x), y: align(origin.y))
+        origin = CGPoint(x: self.align(origin.x), y: self.align(origin.y))
         (s as NSString).draw(at: origin, withAttributes: attrs)
     }
 
@@ -1086,6 +1110,7 @@ final class ChartCanvas: NSView {
 
     private func hitTarget(_ p: CGPoint) -> Hover? {
         if autoButtonRect.insetBy(dx: -2, dy: -2).contains(p) { return .autoButton }
+        if let r = nowButtonRect, r.insetBy(dx: -2, dy: -2).contains(p) { return .nowButton }
         if p.x > plot.maxX && p.y < plot.maxY { return .priceAxis }
         if p.y > timeTop && p.x < plot.maxX { return .timeAxis }
         for (id, r) in lineCloseRects where r.insetBy(dx: -2, dy: -2).contains(p) { return .lineClose(id) }
@@ -1142,7 +1167,7 @@ final class ChartCanvas: NSView {
         switch hover {
         case .line?, .closeHandle?: NSCursor.openHand.set()
         case .lineClose?, .trade?: NSCursor.pointingHand.set()
-        case .endpoint?, .trendline?, .autoButton?: NSCursor.pointingHand.set()
+        case .endpoint?, .trendline?, .autoButton?, .nowButton?: NSCursor.pointingHand.set()
         case .priceAxis?: NSCursor.resizeUpDown.set()
         case .timeAxis?: NSCursor.resizeLeftRight.set()
         case nil: NSCursor.crosshair.set()
@@ -1249,6 +1274,8 @@ final class ChartCanvas: NSView {
             onLineClose?(id)
         case .trade(let t)?:
             onTradeSelect?(highlightTradeID == t ? nil : t)
+        case .nowButton?:
+            goToNow()
         case .autoButton?:
             autoScale.toggle()
             if !autoScale { manualRange = range } else { shownRange = range }
@@ -1486,6 +1513,8 @@ final class ChartCanvas: NSView {
             if let tf = Timeframe.parse(typed) { onTimeframeTyped?(tf) } else { NSSound.beep() }
             typed = ""
             needsDisplay = true
+        case 119: // End: back to the newest candle
+            goToNow()
         case 123: // ←  back in time
             panRemaining += vp.barSpacing * (e.modifierFlags.contains(.shift) ? 10 : 1)
             startAnimating()

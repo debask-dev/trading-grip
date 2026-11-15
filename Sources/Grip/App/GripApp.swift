@@ -96,6 +96,10 @@ struct GripCommands: Commands {
             Button(T("Geselecteerde lijn verwijderen")) { state.deleteSelectedTrendline() }
                 .disabled(state.selectedTrendline == nil)
             Divider()
+            Button(state.showPastTrades ? T("Eerdere trades verbergen") : T("Eerdere trades tonen")) { state.showPastTrades.toggle() }
+                .keyboardShortcut("p", modifiers: .option)
+            // End works in the chart itself; no menu shortcut, so End keeps working in text fields.
+            Button(T("Terug naar nu (End)")) { state.chartCanvas?.goToNow() }
             Button(T("Chart resetten")) { state.resetChart() }
                 .keyboardShortcut("r", modifiers: .option)
             Button(T("Vernieuwen")) { state.refreshEverything() }

@@ -259,6 +259,10 @@ final class AppState: ObservableObject {
         }
     }
     @Published var candles: [Candle] = []
+    /// Candles of tabs you left, per network|coin|timeframe (the last 12), so switching back is instant.
+    var candleCache: [String: [Candle]] = [:]
+    var candleCacheOrder: [String] = []
+    var candlesKey: String?
     /// Mid prices for the UI, published at most once a second (Hyperliquid sends all ~200 markets several times a second).
     @Published var mids: [String: Double] = [:]
     /// Latest mids, unthrottled (paper fills, order prices).
@@ -319,6 +323,10 @@ final class AppState: ObservableObject {
         didSet { defaults.set(confirmMarketOrders, forKey: "confirmMarketOrders") }
     }
     /// Buy/sell markers on the chart: 0 = off, -1 = current trade only, otherwise number of days.
+    /// Markers and links of earlier (closed) trades on the chart. Off = only the open trade (calmer while planning a setup).
+    @Published var showPastTrades: Bool = UserDefaults.standard.object(forKey: "showPastTrades") as? Bool ?? true {
+        didSet { defaults.set(showPastTrades, forKey: "showPastTrades") }
+    }
     @Published var markerDays: Int = UserDefaults.standard.object(forKey: "markerDays") as? Int ?? 7 {
         didSet { defaults.set(markerDays, forKey: "markerDays") }
     }
@@ -648,12 +656,24 @@ final class AppState: ObservableObject {
         candleRequestID += 1
         let requestID = candleRequestID
         let c = coin, tf = timeframe
+        let key = "\(network.rawValue)|\(c)|\(tf.rawValue)"
+        // Keep what the previous tab showed, and show this tab's candles from memory straight away:
+        // switching back is instant, the fresh download below only fills in what is new.
+        if let prev = candlesKey, prev != key, !candles.isEmpty {
+            candleCache[prev] = candles
+            candleCacheOrder.removeAll { $0 == prev }
+            candleCacheOrder.append(prev)
+            while candleCacheOrder.count > 12 { candleCache[candleCacheOrder.removeFirst()] = nil }
+        }
+        if candlesKey != key { candles = candleCache[key] ?? [] }   // never the previous market's candles under this name
+        candlesKey = key
         loadingCandles = true
         stream.setCandleSubscription(coin: c, timeframe: tf)
         do {
             let result = try await client.candles(coin: c, timeframe: tf)
             guard requestID == candleRequestID else { return }
             candles = result
+            candleCache[key] = nil      // the live list is the newest now
         } catch {
             guard requestID == candleRequestID else { return }
             toast(T("Kon koersen niet laden: \(error.localizedDescription)"), .error)
@@ -1498,7 +1518,7 @@ extension AppState {
     /// Markers for the current coin, according to the marker setting.
     /// Markers and trade links only change with new fills or settings: computed once, not on every redraw.
     private func refreshMarkerCache() {
-        let key = "\(coin)|\(markerDays)|\(hideAmounts)|\(analysis.executions.count)|\(analysis.closed.count)|\(fills.last?.tid ?? 0)|\(analysis.open[coin]?.executions.count ?? 0)"
+        let key = "\(coin)|\(markerDays)|\(showPastTrades)|\(hideAmounts)|\(analysis.executions.count)|\(analysis.closed.count)|\(fills.last?.tid ?? 0)|\(analysis.open[coin]?.executions.count ?? 0)"
         guard key != markerCacheKey else { return }
         markerCacheKey = key
         markerCache = computeMarkers()
@@ -1512,7 +1532,7 @@ extension AppState {
         guard markerDays != 0 else { return [] }
         let f = fmt
         var execs: [Execution]
-        if markerDays < 0 {
+        if markerDays < 0 || !showPastTrades {
             execs = analysis.open[coin]?.executions ?? []
         } else {
             let from = Int64(Date().addingTimeInterval(-Double(markerDays) * 86400).timeIntervalSince1970 * 1000)
@@ -1529,7 +1549,7 @@ extension AppState {
     }
 
     private func computeLinks() -> [ChartTradeLink] {
-        guard markerDays > 0 else { return [] }
+        guard markerDays > 0, showPastTrades else { return [] }
         let from = Date().addingTimeInterval(-Double(markerDays) * 86400)
         return analysis.closed.filter { $0.coin == coin && $0.closeTime >= from }.map { t in
             let r = t.rMultiple.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? ""

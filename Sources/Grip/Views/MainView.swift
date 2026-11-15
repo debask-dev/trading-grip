@@ -398,6 +398,12 @@ struct ChartHeader: View {
 
             if state.loadingCandles { ProgressView().controlSize(.small) }
             HStack(spacing: 4) {
+                if state.markerDays != 0 {
+                    ToolButton(icon: state.showPastTrades ? "clock.arrow.circlepath" : "clock.badge.xmark", active: !state.showPastTrades,
+                               help: state.showPastTrades ? T("Eerdere trades verbergen (⌥P)") : T("Eerdere trades tonen (⌥P)")) {
+                        state.showPastTrades.toggle()
+                    }
+                }
                 ToolButton(icon: "camera", active: false, help: T("Screenshot van de chart (⇧⌘S) – bewaard in \((state.screenshotFolder as NSString).abbreviatingWithTildeInPath)")) {
                     state.takeScreenshot()
                 }

@@ -669,5 +669,10 @@ Paars	Purple
 Geen kleur	No color
 Rechtsklik voor een kleurlabel	Right-click for a color label
 Totaal {}	Total {}
+Eerdere trades verbergen	Hide earlier trades
+Eerdere trades tonen	Show earlier trades
+Eerdere trades verbergen (⌥P)	Hide earlier trades (⌥P)
+Eerdere trades tonen (⌥P)	Show earlier trades (⌥P)
+Terug naar nu (End)	Back to now (End)
 """#
 #endif
