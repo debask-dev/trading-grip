@@ -245,9 +245,10 @@ public enum OrderPlanner {
                     let q = afterSize * tp.fraction / max(tf, 1)
                     return acc + q * (dir * (tp.price - afterEntry) - i.entryFeeRate * tp.price)
                 } - size * i.entryFeeRate * avg
-                if let s = stop {
-                    let move = ladder.reduce(0) { $0 + abs($1.price - afterEntry) * $1.fraction } / tf
-                    rr = move / max(abs(afterEntry - s), 1e-12)
+                // R in money, fees included on both sides: what the take-profits bring ÷ what the stop costs.
+                // The same as the chart shows once the trade is placed.
+                if stop != nil, let risk = riskTotal, risk > 0, let p = profit {
+                    rr = p / risk
                 }
             }
         }

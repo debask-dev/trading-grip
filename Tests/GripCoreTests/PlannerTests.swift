@@ -86,4 +86,16 @@ final class PlannerTests: XCTestCase {
         let c = try XCTUnwrap(OrderPlanner.plan(i))
         XCTAssertGreaterThan(c.estLiquidationPx, 60_000)
     }
+
+    /// R:R in the order form is money after fees (the same as the chart shows once placed), not price distance.
+    func testRewardRiskIncludesFees() throws {
+        var i = input([TPTarget(price: 65_000, fraction: 1)], stop: 64_870)       // stop 0,2% away
+        i.takeProfits = [TPTarget(price: 65_416, fraction: 1)]                    // 3,2× as far as the stop
+        i.takerFeeRate = 0.00045; i.entryFeeRate = 0.00015
+        let p = try XCTUnwrap(OrderPlanner.plan(i))
+        let rr = try XCTUnwrap(p.rewardRisk)
+        XCTAssertEqual(rr, (p.potentialProfit ?? 0) / (p.riskUsd ?? 1), accuracy: 1e-9)
+        XCTAssertLessThan(rr, 3.2)                                                // fees on both sides
+        XCTAssertEqual(rr, 2.35, accuracy: 0.01)                                 // 3,2R in price, 2,35R after fees
+    }
 }

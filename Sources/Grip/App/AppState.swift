@@ -1120,8 +1120,12 @@ final class AppState: ObservableObject {
             let avg = pl.after.avgEntry
             let qty = pl.after.size * lvl.pct / 100
             let profit = qty * (t.isLong ? px - avg : avg - px) - qty * feeRates.maker * (avg + px)
-            let rr = t.useStopLoss ? T(" · \(Fmt.number(abs(px - avg) / max(abs(avg - t.stopLoss), 1e-12), decimals: 1))R") : ""
-            return T("TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))\(rr)")
+            // One take-profit: the whole trade, in R after fees (as the chart shows once placed). More: only their part.
+            if t.tps.count == 1 {
+                let rr = t.useStopLoss ? (pl.riskUsd ?? 0) > 0 ? " · " + Fmt.number(profit / pl.riskUsd!, decimals: 1) + "R" : "" : ""
+                return "TP · " + f.signedUsd(profit) + rr
+            }
+            return T("TP\(i + 1) · \(Int(lvl.pct))%  \(f.signedUsd(profit))")
         case .ticketLiq:
             return T("LIQ ≈ \(Fmt.price(px))")
         case .pendingTP(let i):
