@@ -114,7 +114,7 @@ extension Array {
 }
 
 enum LineID: Hashable {
-    case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, pendingTP(Int), order(Int64), position, breakEven, liquidation
+    case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, pendingTP(Int), draftTP(Int), order(Int64), position, breakEven, liquidation
 }
 
 /// A buy/sell marker on the chart.
@@ -277,6 +277,10 @@ final class AppState: ObservableObject {
     @Published var busy = false
     @Published var showOnboarding = false
     @Published var pendingOrderPrices: [Int64: Double] = [:]
+    /// Take-profits being changed after placing (Positie tab / open orders), shown as lines in the chart.
+    @Published var tpDraft: TPDraft?
+    /// Open order being changed in the order list (price and size).
+    @Published var orderEdit: OrderEdit?
     weak var chartCanvas: ChartCanvas?
     // Fees, funding and order types (for labelled executions and net results)
     @Published var feeRates: FeeRates = .base
@@ -1003,8 +1007,15 @@ final class AppState: ObservableObject {
                 lines.append(ChartLine(id: .ticketLiq, price: pl.estLiquidationPx, color: Palette.red.withAlphaComponent(0.7), dashed: true, draggable: false))
             }
         }
+        // Take-profits being changed: these lines stand in for the current ones.
+        let draft = tpDraft.flatMap { $0.coin == coin ? $0 : nil }
+        if let draft {
+            for (i, l) in draft.levels.enumerated() {
+                lines.append(ChartLine(id: .draftTP(i), price: l.price, color: Palette.green, dashed: true, draggable: true, closable: true))
+            }
+        }
         // Take-profits that wait for the entry to fill.
-        if let pend = managed[coin]?.tps {
+        if draft == nil, let pend = managed[coin]?.tps {
             for (i, px) in pend.prices.enumerated() {
                 lines.append(ChartLine(id: .pendingTP(i), price: px, color: Palette.green.withAlphaComponent(0.45), dashed: true, draggable: false))
             }
@@ -1012,7 +1023,8 @@ final class AppState: ObservableObject {
         // While adding, the ticket's stop line stands for the position's stop.
         let hideStop = t.map { $0.useStopLoss && !$0.reduceOnly && position != nil } ?? false
         for o in coinOrders where !(hideStop && o.isTrigger && o.tpsl == .sl) {
-            let px = pendingOrderPrices[o.oid] ?? o.displayPx
+            if draft != nil && o.reduceOnly && (!o.isTrigger || o.tpsl == .tp) { continue }
+            let px = orderEdit?.oid == o.oid ? orderEdit!.price : (pendingOrderPrices[o.oid] ?? o.displayPx)
             let color: NSColor = o.isTrigger ? (o.tpsl == .tp ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.orange : Palette.blue)
             lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: !o.isTrigger, draggable: true, closable: true))
         }
@@ -1055,6 +1067,11 @@ final class AppState: ObservableObject {
             let n = managed[coin]?.tps?.prices.count ?? 1
             let pct = Int(((managed[coin]?.tps?.fractions[safe: i] ?? 1) * 100).rounded())
             return T("TP\(n > 1 ? "\(i + 1)" : "") · \(pct)%  wacht op entry")
+        case .draftTP(let i):
+            guard let d = tpDraft, d.levels.indices.contains(i) else { return "" }
+            var l = d.levels[i]
+            l.price = px
+            return T("TP\(i + 1) · \(Int(l.pct))%  \(f.signedUsd(draftProfit(l, isLong: d.isLong)))  · nieuw")
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
             if let pos = position, o.isTrigger && o.tpsl == .sl {
@@ -1078,7 +1095,11 @@ final class AppState: ObservableObject {
         case .position:
             guard let pos = position else { return "" }
             let net = positionNet ?? 0
-            return T("\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  ·  gem. \(Fmt.price(pos.entryPx))  ·  netto \(f.signedUsd(net, decimals: 2))  (\(Fmt.percent(net / eq, decimals: 2)))")
+            let label = T("\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  ·  gem. \(Fmt.price(pos.entryPx))  ·  netto \(f.signedUsd(net, decimals: 2))  (\(Fmt.percent(net / eq, decimals: 2)))")
+            // Take-profits that close only part: say how much runs until the stop.
+            let cover = TPEditor.coverage(currentTPs)
+            guard cover > 0.005 && cover < 0.995 else { return label }
+            return label + "  ·  " + T("\(Int(((1 - cover) * 100).rounded()))% zonder TP")
         case .breakEven:
             return T("BE \(Fmt.price(px))  ·  break-even na fees\((openTrade?.funding ?? 0) != 0 ? " + funding" : "")")
         case .liquidation:
@@ -1100,6 +1121,9 @@ final class AppState: ObservableObject {
         case .ticketSL: ticket?.stopLoss = px
         case .ticketTP(let i): if ticket?.tps.indices.contains(i) == true { ticket?.tps[i].price = px }
         case .ticketLiq, .pendingTP: break
+        case .draftTP(let i): setDraftPrice(i, px)
+        case .order(let oid) where orderEdit?.oid == oid:
+            orderEdit?.price = px
         case .order(let oid):
             pendingOrderPrices[oid] = px
             if ended { Task { await moveOrder(oid: oid, to: px) } }

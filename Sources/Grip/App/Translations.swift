@@ -609,5 +609,29 @@ Hele trade bij stop	Whole trade at stop
 Hele trade bij stop: {} ({} van je account), fees en al gerealiseerde delen meegerekend	Whole trade at stop: {} ({} of your account), fees and already realized parts included
 Gemiddelden	Moving averages
 gem. entry	avg entry
+TP's aanpassen	Edit TPs
+Prijs, aantal en verdeling van je take-profits wijzigen, ook voordat de entry gevuld is	Change price, size and split of your take-profits, also before the entry fills
+Klik om prijs en hoeveelheid te wijzigen	Click to change price and size
+Klik een order om prijs of hoeveelheid te wijzigen; slepen in de chart kan ook.	Click an order to change its price or size; dragging in the chart works too.
+Take-profits aanpassen	Edit take-profits
+dekt {}%	covers {}%
+{}% zonder TP · loopt tot je stop	{}% without TP · runs until your stop
+{}% zonder TP	{}% without TP
++ TP voor rest	+ TP for the rest
+Je entry is nog niet gevuld. Eén TP voor alles blijft aan de entry gekoppeld; meerdere TP's plaatst Grip zodra de entry vult (Grip moet dan open zijn).	Your entry has not filled yet. A single TP for everything stays linked to the entry; Grip places several TPs once the entry fills (Grip has to be open then).
+Toepassen	Apply
+De stop dekt altijd je hele positie; alleen de prijs is aan te passen.	The stop always covers your whole position; only its price can be changed.
+Gekoppelde stop en take-profit groeien of krimpen mee.	The linked stop and take-profit grow or shrink along.
+TP{} ligt aan de verkeerde kant van de koers	TP{} is on the wrong side of the price
+Te klein: een order moet minimaal $10 zijn	Too small: an order must be at least $10
+TP{} is kleiner dan $10; Grip voegt hem samen met de volgende	TP{} is under $10; Grip merges it with the next one
+Take-profit aangepast	Take-profit changed
+Take-profits aangepast. Grip plaatst ze zodra je entry gevuld is.	Take-profits changed. Grip places them once your entry fills.
+Take-profits aangepast: samen {}%, de rest loopt tot je stop	Take-profits changed: {}% together, the rest runs until your stop
+Take-profits aangepast	Take-profits changed
+Take-profits niet aangepast: {}	Take-profits not changed: {}
+{} aangepast: {} @ {}	{} changed: {} @ {}
+Order niet aangepast: {}	Order not changed: {}
+TP{} · {}%  {}  · nieuw	TP{} · {}%  {}  · new
 """#
 #endif

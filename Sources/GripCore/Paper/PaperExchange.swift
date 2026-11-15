@@ -289,7 +289,8 @@ public final class PaperExchange: Codable, @unchecked Sendable {
             positions.append(Position(coin: coin, size: h.size, entryPx: h.entry, unrealizedPnl: u, liquidationPx: h.leverage > 1 ? liq : nil,
                                       leverage: h.leverage, isCross: h.isCross, marginUsed: m))
         }
-        let open = orders.filter { $0.parentOid == nil }.map { o in
+        // Like Hyperliquid: stop and take-profit linked to an entry are listed (and can be cancelled) before it fills.
+        let open = orders.map { o in
             OpenOrder(oid: o.oid, coin: o.coin, isBuy: o.isBuy, limitPx: o.px, size: o.size, reduceOnly: o.reduceOnly,
                       isTrigger: o.triggerPx != nil, triggerPx: o.triggerPx, tpsl: o.tpsl, isPositionTpsl: o.isPositionTpsl,
                       orderType: o.triggerPx == nil ? "Limit" : (o.tpsl == .tp ? "Take Profit Market" : "Stop Market"), timestamp: o.time)

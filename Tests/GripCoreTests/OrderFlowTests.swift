@@ -14,26 +14,28 @@ final class OrderFlowTests: XCTestCase {
         guard let cur = m else { return [] }
         let st = state(p)
         let step = TradeKeeper.step(cur, position: st.position(for: "BTC"), orders: st.orders(for: "BTC"), szDecimals: btc.szDecimals)
-        for a in step.actions {
-            switch a {
-            case .cancel(let oid): try p.cancel(oid: oid)
-            case .placeStop(let size, let px):
-                let r = try p.place([OrderRequest(asset: btc, isBuy: !cur.isLong, size: size, limitPx: px, reduceOnly: true,
-                                                  kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))], grouping: "na", marks: marks)
-                XCTAssertFalse(r.contains { if case .error = $0 { return true }; return false })
-            case .resizeStop(let oid, let size, let px):
-                try p.modify(oid: oid, to: OrderRequest(asset: btc, isBuy: !cur.isLong, size: size, limitPx: px, reduceOnly: true,
-                                                        kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl)))
-            case .placeTakeProfits(let tps):
-                let r = try p.place(tps.map { OrderRequest(asset: btc, isBuy: !cur.isLong, size: $0.size, limitPx: $0.price, reduceOnly: true, kind: .limit(tif: "Gtc")) },
-                                    grouping: "na", marks: marks)
-                XCTAssertFalse(r.contains { if case .error = $0 { return true }; return false })
-            case .resizeTakeProfit(let oid, let size, let px, _):
-                try p.modify(oid: oid, to: OrderRequest(asset: btc, isBuy: !cur.isLong, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Gtc")))
-            }
-        }
+        for a in step.actions { try exec(p, a, isLong: cur.isLong) }
         m = step.next
         return step.actions
+    }
+
+    private func exec(_ p: PaperExchange, _ a: KeeperAction, isLong: Bool) throws {
+        switch a {
+        case .cancel(let oid): try p.cancel(oid: oid)
+        case .placeStop(let size, let px):
+            let r = try p.place([OrderRequest(asset: btc, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true,
+                                              kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))], grouping: "na", marks: marks)
+            XCTAssertFalse(r.contains { if case .error = $0 { return true }; return false })
+        case .resizeStop(let oid, let size, let px):
+            try p.modify(oid: oid, to: OrderRequest(asset: btc, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true,
+                                                    kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl)))
+        case .placeTakeProfits(let tps):
+            let r = try p.place(tps.map { OrderRequest(asset: btc, isBuy: !isLong, size: $0.size, limitPx: $0.price, reduceOnly: true, kind: .limit(tif: "Gtc")) },
+                                grouping: "na", marks: marks)
+            XCTAssertFalse(r.contains { if case .error = $0 { return true }; return false })
+        case .resizeTakeProfit(let oid, let size, let px, _):
+            try p.modify(oid: oid, to: OrderRequest(asset: btc, isBuy: !isLong, size: size, limitPx: px, reduceOnly: true, kind: .limit(tif: "Gtc")))
+        }
     }
 
     private func move(_ p: PaperExchange, to px: Double) { marks["BTC"] = px; p.onPrices(marks) }
@@ -173,5 +175,91 @@ final class OrderFlowTests: XCTestCase {
         try keep(p, &m)
         XCTAssertNil(state(p).position(for: "BTC"))
         XCTAssertNil(m)
+    }
+
+    // MARK: Changing take-profits after placing
+
+    func testSplitCanCoverPartOfThePosition() {
+        let tps = TradeKeeper.split(total: 0.1, prices: [65_500, 66_000], fractions: [0.4, 0.3], szDecimals: 5)
+        XCTAssertEqual(tps.map(\.size), [0.04, 0.03])
+        // A full ladder still closes everything.
+        XCTAssertEqual(TradeKeeper.split(total: 0.1, prices: [65_500, 66_000], fractions: [0.4, 0.6], szDecimals: 5).map(\.size), [0.04, 0.06])
+    }
+
+    /// The owner's case: a short with one linked take-profit, changed to 40/60 before the entry fills.
+    func testChangeTakeProfitsBeforeEntryFills() throws {
+        let p = PaperExchange(balance: 10_000)
+        p.updateLeverage(coin: "BTC", isCross: true, leverage: 3)
+        let st = try p.place([
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 65_200, reduceOnly: false, kind: .limit(tif: "Gtc")),
+            OrderRequest(asset: btc, isBuy: true, size: 0.1, limitPx: 65_600, reduceOnly: true, kind: .trigger(triggerPx: 65_600, isMarket: true, tpsl: .sl)),
+            OrderRequest(asset: btc, isBuy: true, size: 0.1, limitPx: 64_000, reduceOnly: true, kind: .trigger(triggerPx: 64_000, isMarket: false, tpsl: .tp)),
+        ], grouping: "normalTpsl", marks: marks)
+        let entry = st.compactMap { if case .resting(let o) = $0 { return o }; return nil }[0]
+        var m: ManagedTrade? = ManagedTrade(isLong: false, stop: 65_600, entryOids: [entry], lastSize: 0)
+        let orders = state(p).orders(for: "BTC")
+        XCTAssertEqual(TPEditor.current(m, isLong: false, position: nil, orders: orders), [TPTarget(price: 64_000, fraction: 1)])
+
+        let edit = TPEditor.apply([TPTarget(price: 64_000, fraction: 0.6), TPTarget(price: 64_400, fraction: 0.4)],
+                                  to: m, isLong: false, position: nil, orders: orders, szDecimals: btc.szDecimals)
+        let linkedTP = orders.first { $0.tpsl == .tp }!.oid
+        XCTAssertEqual(edit.actions, [.cancel(oid: linkedTP)])
+        for a in edit.actions { try exec(p, a, isLong: false) }
+        m = edit.next
+        XCTAssertEqual(m?.tps?.prices, [64_400, 64_000])               // nearest first
+        XCTAssertEqual(state(p).orders(for: "BTC").count, 2)           // entry and its stop stay
+        XCTAssertEqual(TPEditor.current(m, isLong: false, position: nil, orders: state(p).orders(for: "BTC")).map(\.fraction), [0.4, 0.6])
+
+        move(p, to: 65_210)                                            // entry fills
+        try keep(p, &m)
+        XCTAssertEqual(stops(p).count, 1)
+        XCTAssertEqual(stops(p).first?.size ?? 0, 0.1, accuracy: 1e-9)
+        XCTAssertEqual(tps(p).map(\.size), [0.04, 0.06])
+        XCTAssertEqual(tps(p).map(\.limitPx), [64_400, 64_000])
+        XCTAssertTrue(state(p).orders(for: "BTC").filter { $0.tpsl == .tp }.isEmpty, "the old linked TP is gone")
+
+        move(p, to: 64_390)                                            // TP1
+        try keep(p, &m)
+        XCTAssertEqual(abs(state(p).position(for: "BTC")?.size ?? 0), 0.06, accuracy: 1e-9)
+        XCTAssertEqual(stops(p).first?.size ?? 0, 0.06, accuracy: 1e-9)
+    }
+
+    /// One linked take-profit that only moves stays linked (on the exchange) instead of waiting for Grip.
+    func testMovingSingleLinkedTakeProfitKeepsIt() throws {
+        let p = PaperExchange(balance: 10_000)
+        p.updateLeverage(coin: "BTC", isCross: true, leverage: 3)
+        _ = try p.place([
+            OrderRequest(asset: btc, isBuy: true, size: 0.1, limitPx: 64_800, reduceOnly: false, kind: .limit(tif: "Gtc")),
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 64_300, reduceOnly: true, kind: .trigger(triggerPx: 64_300, isMarket: true, tpsl: .sl)),
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 65_600, reduceOnly: true, kind: .trigger(triggerPx: 65_600, isMarket: false, tpsl: .tp)),
+        ], grouping: "normalTpsl", marks: marks)
+        let orders = state(p).orders(for: "BTC")
+        let tp = orders.first { $0.tpsl == .tp }!
+        let edit = TPEditor.apply([TPTarget(price: 65_900, fraction: 1)], to: nil, isLong: true, position: nil, orders: orders, szDecimals: btc.szDecimals)
+        XCTAssertEqual(edit.actions, [.resizeTakeProfit(oid: tp.oid, size: 0.1, price: 65_900, isTrigger: true)])
+        XCTAssertNil(edit.next.tps)
+        XCTAssertEqual(edit.next.stop, 64_300)
+    }
+
+    /// With a position: two take-profits that close 70%; the rest runs until the stop.
+    func testChangeTakeProfitsOnPositionToPartialCover() throws {
+        let p = PaperExchange(balance: 10_000)
+        p.updateLeverage(coin: "BTC", isCross: true, leverage: 3)
+        _ = try p.place([OrderRequest(asset: btc, isBuy: true, size: 0.1, limitPx: 65_500, reduceOnly: false, kind: .limit(tif: "Ioc"))], grouping: "na", marks: marks)
+        _ = try p.place([
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 64_000, reduceOnly: true, kind: .trigger(triggerPx: 64_000, isMarket: true, tpsl: .sl)),
+            OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 66_000, reduceOnly: true, kind: .limit(tif: "Gtc")),
+        ], grouping: "na", marks: marks)
+        var m: ManagedTrade? = ManagedTrade(isLong: true, stop: 64_000, lastSize: 0.1)
+        let pos = state(p).position(for: "BTC")
+        let edit = TPEditor.apply([TPTarget(price: 65_500, fraction: 0.4), TPTarget(price: 66_000, fraction: 0.3)],
+                                  to: m, isLong: true, position: pos, orders: state(p).orders(for: "BTC"), szDecimals: btc.szDecimals)
+        for a in edit.actions { try exec(p, a, isLong: true) }
+        m = edit.next
+        XCTAssertEqual(tps(p).map(\.size), [0.04, 0.03])
+        let now = TPEditor.current(m, isLong: true, position: pos, orders: state(p).orders(for: "BTC"))
+        XCTAssertEqual(TPEditor.coverage(now), 0.7, accuracy: 1e-9)
+        XCTAssertTrue(try keep(p, &m).isEmpty)                         // the keeper leaves it alone
+        XCTAssertEqual(stops(p).first?.size ?? 0, 0.1, accuracy: 1e-9) // the stop still covers everything
     }
 }

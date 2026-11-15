@@ -12,8 +12,10 @@ final class PaperTests: XCTestCase {
             OrderRequest(asset: btc, isBuy: false, size: 0.1, limitPx: 98_000, reduceOnly: true, kind: .trigger(triggerPx: 98_000, isMarket: true, tpsl: .sl)),
         ], grouping: "normalTpsl", marks: ["BTC": 100_000], time: 1)
         guard case .resting = st[0] else { return XCTFail("entry should rest") }
-        // Children are hidden until the entry fills
-        XCTAssertEqual(ex.accountState(marks: ["BTC": 100_000], assets: [btc]).openOrders.count, 1)
+        // Children are listed before the entry fills (like Hyperliquid), but only become active at the fill
+        XCTAssertEqual(ex.accountState(marks: ["BTC": 100_000], assets: [btc]).openOrders.count, 3)
+        ex.onPrices(["BTC": 102_100], time: 2)
+        XCTAssertTrue(ex.accountState(marks: ["BTC": 102_100], assets: [btc]).positions.isEmpty)
 
         ex.onPrices(["BTC": 98_990], time: 2)
         var acct = ex.accountState(marks: ["BTC": 98_990], assets: [btc])

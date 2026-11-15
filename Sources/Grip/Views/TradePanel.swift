@@ -632,7 +632,9 @@ struct PositionTab: View {
                     if let r = state.resultAtStop(pos) {
                         KV(T("Hele trade bij stop"), "\(state.fmt.signedUsd(r, decimals: 2)) · \(Fmt.percent(r / eq, decimals: 2))", color: Theme.pnl(r))
                     }
-                    KV(T("Take-profit"), tps.isEmpty ? T("geen") : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · "), color: tps.isEmpty ? Theme.muted : Theme.green)
+                    let cover = TPEditor.coverage(state.currentTPs)
+                    KV(T("Take-profit"), tps.isEmpty ? T("geen") : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · ") + (cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : ""),
+                       color: tps.isEmpty ? Theme.muted : (cover < 0.995 ? Theme.orange : Theme.green))
                     if let liq = pos.liquidationPx { KV(T("Liquidatie"), Fmt.price(liq), color: Theme.orange) }
                     if let ot, ot.realized != 0 { KV(T("Al gerealiseerd"), state.fmt.signedUsd(ot.realized, decimals: 2), color: Theme.pnl(ot.realized)) }
                 }
@@ -772,34 +774,224 @@ struct OrdersCard: View {
     @EnvironmentObject var state: AppState
     var body: some View {
         let orders = state.coinOrders
-        if !orders.isEmpty {
-            Card(title: T("Open orders \(state.coin)")) {
+        let draft = state.tpDraft.flatMap { $0.coin == state.coin ? $0 : nil }
+        let pending = state.position == nil ? state.managed[state.coin]?.tps : nil
+        if !orders.isEmpty || draft != nil {
+            Card(title: T("Open orders \(state.coin)"), trailing: draft == nil && state.canEditTPs ? AnyView(
+                Button(T("TP's aanpassen")) { state.startTPEdit() }
+                    .buttonStyle(ChipStyle(active: false))
+                    .help(T("Prijs, aantal en verdeling van je take-profits wijzigen, ook voordat de entry gevuld is"))
+            ) : nil) {
+                if let draft { TPEditorView(draft: draft) }
                 ForEach(orders) { o in
-                    HStack(spacing: 8) {
-                        Circle().fill(color(o)).frame(width: 7, height: 7)
-                        Text(state.orderName(o)).font(.system(size: 12))
-                        Spacer()
-                        if let pnl = state.setupOutcome(o) {
-                            Text(state.fmt.signedUsd(pnl)).mono(11).foregroundStyle(pnl < 0 ? Theme.red : Theme.green)
-                        }
-                        Text(Fmt.price(state.pendingOrderPrices[o.oid] ?? o.displayPx)).mono(12)
+                    let editing = state.orderEdit?.oid == o.oid
+                    if draft != nil && o.reduceOnly && (!o.isTrigger || o.tpsl == .tp) {
+                        EmptyView()
+                    } else {
                         Button {
-                            Task { await state.cancelOrder(o.oid) }
+                            if editing { state.orderEdit = nil } else { state.startOrderEdit(o) }
                         } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(Theme.dim)
+                            HStack(spacing: 8) {
+                                Circle().fill(color(o)).frame(width: 7, height: 7)
+                                Text(state.orderName(o)).font(.system(size: 12))
+                                if o.reduceOnly && !(o.isTrigger && o.tpsl == .sl), let share = share(o) {
+                                    Text(share).mono(10.5).foregroundStyle(Theme.dim)
+                                }
+                                Spacer()
+                                if let pnl = state.setupOutcome(o) {
+                                    Text(state.fmt.signedUsd(pnl)).mono(11).foregroundStyle(pnl < 0 ? Theme.red : Theme.green)
+                                }
+                                Text(Fmt.price(state.pendingOrderPrices[o.oid] ?? o.displayPx)).mono(12)
+                            }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help(T("Annuleer"))
+                        .help(T("Klik om prijs en hoeveelheid te wijzigen"))
+                        .contextMenu { Button(T("Annuleer order")) { Task { await state.cancelOrder(o.oid) } } }
+                        if editing, let e = state.orderEdit { OrderEditView(order: o, edit: e) }
                     }
                 }
-                Text(T("Tip: sleep een orderlijn in de chart om de prijs te wijzigen.")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+                if draft == nil, let pending {
+                    ForEach(Array(pending.prices.enumerated()), id: \.offset) { i, px in
+                        HStack(spacing: 8) {
+                            Circle().stroke(Theme.green, lineWidth: 1.5).frame(width: 7, height: 7)
+                            Text(T("Take-profit")).font(.system(size: 12))
+                            Text("\(Int(((pending.fractions[safe: i] ?? 0) * 100).rounded()))%").mono(10.5).foregroundStyle(Theme.dim)
+                            Spacer()
+                            Text(T("wacht op entry")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+                            Text(Fmt.price(px)).mono(12)
+                        }
+                    }
+                }
+                Text(T("Klik een order om prijs of hoeveelheid te wijzigen; slepen in de chart kan ook.")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
             }
         }
+    }
+
+    /// Share of the position (or of the waiting entry) a reduce-only order closes.
+    private func share(_ o: OpenOrder) -> String? {
+        let base = state.orderBaseSize(o)
+        guard base > 0, o.size > 0 else { return nil }
+        return "\(Int((min(o.size / base, 1) * 100).rounded()))%"
     }
 
     private func color(_ o: OpenOrder) -> Color {
         if o.isTrigger { return o.tpsl == .tp ? Theme.green : Theme.red }
         return o.reduceOnly ? Theme.orange : Theme.blue
+    }
+}
+
+/// Changing the take-profits after placing: price and share per level, a share under 100% is allowed.
+struct TPEditorView: View {
+    @EnvironmentObject var state: AppState
+    let draft: TPDraft
+    private var priceDecimals: Int { max(0, -Int(floor(log10(state.priceTick) + 1e-9))) }
+
+    var body: some View {
+        let total = min(draft.total, 100)
+        let full = total >= 99.5
+        let issue = state.draftIssue
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(T("Take-profits aanpassen")).font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text(T("dekt \(Int(total.rounded()))%")).mono(11, .semibold).foregroundStyle(full ? Theme.green : Theme.orange)
+            }
+            ForEach(Array(draft.levels.enumerated()), id: \.element.id) { i, l in
+                HStack(spacing: 6) {
+                    Text("TP\(i + 1)").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                    Spacer(minLength: 4)
+                    NumberField(value: l.price, step: state.priceTick, decimals: priceDecimals, grouping: true, color: Theme.green,
+                                range: state.priceTick...1e12, width: 72) { state.setDraftPrice(i, $0) }
+                    NumberField(value: l.pct, step: 5, decimals: 0, range: 1...100, suffix: "%", width: 34) { state.setDraftPct(i, $0) }
+                    Text(state.fmt.signedUsd(state.draftProfit(l, isLong: draft.isLong))).mono(10.5).foregroundStyle(Theme.green)
+                        .frame(minWidth: 44, alignment: .trailing)
+                    RemoveButton(help: T("Take-profit weghalen")) { state.removeDraftTP(i) }
+                }
+            }
+            CoverageBar(levels: draft.levels.map(\.pct))
+            if !full && !draft.levels.isEmpty {
+                HStack {
+                    Text(T("\(Int((100 - total).rounded()))% zonder TP · loopt tot je stop")).font(.system(size: 11)).foregroundStyle(Theme.orange)
+                    Spacer()
+                    Button(T("+ TP voor rest")) { state.addDraftRest() }.buttonStyle(ChipStyle(active: false))
+                        .disabled(draft.levels.count >= 5)
+                }
+            }
+            HStack(spacing: 6) {
+                Button(T("+ TP")) { state.addDraftTP() }.buttonStyle(ChipStyle(active: false)).disabled(draft.levels.count >= 5)
+                let n = draft.levels.count
+                if n > 1 {
+                    Button(T("Gelijk")) { state.applyDraftSplit(state.defaultSplit(n)) }.buttonStyle(ChipStyle(active: false))
+                    if n == 2 { Button("40/60") { state.applyDraftSplit([40, 60]) }.buttonStyle(ChipStyle(active: draft.levels.map(\.pct) == [40, 60])) }
+                    if n == 3 { Button("50/30/20") { state.applyDraftSplit([50, 30, 20]) }.buttonStyle(ChipStyle(active: draft.levels.map(\.pct) == [50, 30, 20])) }
+                }
+            }
+            if let issue {
+                Text(issue.text).font(.system(size: 11)).foregroundStyle(issue.blocks ? Theme.red : Theme.orange)
+            }
+            if state.position == nil {
+                Text(T("Je entry is nog niet gevuld. Eén TP voor alles blijft aan de entry gekoppeld; meerdere TP's plaatst Grip zodra de entry vult (Grip moet dan open zijn)."))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Button { state.tpDraft = nil } label: { Text(T("Annuleer")).frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                Button { Task { await state.applyTPDraft() } } label: { Text(T("Toepassen")).frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: Theme.green))
+                    .disabled(state.busy || issue?.blocks == true)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.bg.opacity(0.5)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+}
+
+/// Bar that shows how much of the position the take-profits close; the uncovered part is orange.
+struct CoverageBar: View {
+    let levels: [Double]
+    var body: some View {
+        GeometryReader { g in
+            HStack(spacing: 2) {
+                ForEach(Array(levels.enumerated()), id: \.offset) { _, p in
+                    Rectangle().fill(Theme.green).frame(width: max(g.size.width * min(p, 100) / 100 - 2, 1))
+                }
+                let rest = max(100 - levels.reduce(0, +), 0)
+                if rest > 0.5 { Rectangle().fill(Theme.orange.opacity(0.45)).frame(width: max(g.size.width * rest / 100 - 2, 1)) }
+            }
+        }
+        .frame(height: 5)
+        .clipShape(RoundedRectangle(cornerRadius: 2.5))
+    }
+}
+
+/// One open order opened up in the list: price, and size (share for take-profits and close orders, coins for entries).
+struct OrderEditView: View {
+    @EnvironmentObject var state: AppState
+    let order: OpenOrder
+    let edit: OrderEdit
+    private var priceDecimals: Int { max(0, -Int(floor(log10(state.priceTick) + 1e-9))) }
+
+    var body: some View {
+        let isStop = order.isTrigger && order.tpsl == .sl
+        let base = state.orderBaseSize(order)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(T("Prijs")).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Spacer()
+                NumberField(value: edit.price, step: state.priceTick, decimals: priceDecimals, grouping: true, color: color,
+                            range: state.priceTick...1e12, width: 96) { state.orderEdit?.price = state.roundToTick($0) }
+            }
+            if isStop {
+                Text(T("De stop dekt altijd je hele positie; alleen de prijs is aan te passen.")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+            } else if order.reduceOnly && base > 0 {
+                HStack {
+                    Text(T("Deel")).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Text(state.fmt.size(edit.size, coin: state.coin, decimals: state.szDecimals)).mono(10.5).foregroundStyle(Theme.dim)
+                    Spacer()
+                    NumberField(value: (edit.size / base * 100).rounded(), step: 5, decimals: 0, range: 1...100, suffix: "%", width: 40) {
+                        state.orderEdit?.size = base * $0 / 100
+                    }
+                }
+                HStack(spacing: 6) {
+                    ForEach([25.0, 50, 75, 100], id: \.self) { p in
+                        Button("\(Int(p))%") { state.orderEdit?.size = base * p / 100 }
+                            .buttonStyle(ChipStyle(active: abs(edit.size / base * 100 - p) < 0.5))
+                    }
+                }
+            } else {
+                let step = pow(10, -Double(state.szDecimals))
+                HStack {
+                    Text(T("Grootte")).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Spacer()
+                    NumberField(value: edit.size, step: step, decimals: state.szDecimals, range: step...1e12, suffix: state.coin, width: 96) {
+                        state.orderEdit?.size = $0
+                    }
+                }
+                if state.position == nil {
+                    Text(T("Gekoppelde stop en take-profit groeien of krimpen mee.")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+                }
+            }
+            HStack(spacing: 8) {
+                Button { state.orderEdit = nil } label: { Text(T("Annuleer")).frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                Button { Task { await state.applyOrderEdit() } } label: { Text(T("Opslaan")).frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: color))
+                    .disabled(state.busy)
+                Button { Task { await state.cancelOrder(order.oid); state.orderEdit = nil } } label: { Image(systemName: "trash") }
+                    .buttonStyle(.plain).foregroundStyle(Theme.dim)
+                    .help(T("Annuleer order"))
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.bg.opacity(0.5)))
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.line))
+    }
+
+    private var color: Color {
+        if order.isTrigger { return order.tpsl == .tp ? Theme.green : Theme.red }
+        return order.reduceOnly ? Theme.orange : Theme.blue
     }
 }
 

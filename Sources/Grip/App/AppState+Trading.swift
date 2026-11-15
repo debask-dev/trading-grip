@@ -37,6 +37,7 @@ extension AppState {
         case .ticketEntry(let i): removeTicketEntry(i)
         case .ticketSL: if ticket?.riskSized == false { setUseStop(false) }
         case .ticketLiq, .pendingTP: break
+        case .draftTP(let i): removeDraftTP(i)
         case .ticketTP(let i): removeTicketTP(i)
         case .order(let oid):
             Task { await cancelOrder(oid) }

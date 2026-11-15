@@ -568,7 +568,7 @@ extension AppState {
         }
     }
 
-    private func execute(_ action: KeeperAction, coin c: String, asset a: AssetInfo, isLong: Bool) async throws {
+    func execute(_ action: KeeperAction, coin c: String, asset a: AssetInfo, isLong: Bool) async throws {
         switch action {
         case .cancel(let oid):
             try await execCancel(a, oid: oid)

@@ -53,10 +53,18 @@ public enum TradeKeeper {
     public static let minOrderValue = 10.0
 
     /// Sizes for a take-profit ladder. Levels under $10 are merged into the next one (the last takes the rest),
-    /// so Hyperliquid does not reject them.
+    /// so Hyperliquid does not reject them. Fractions that add up to less than 1 cover only that part of `total`
+    /// (the rest runs until the stop); more than 1 is scaled down to the whole position.
     public static func split(total: Double, prices: [Double], fractions: [Double], szDecimals: Int, minValue: Double = minOrderValue) -> [TPOrder] {
         guard total > 0, !prices.isEmpty, prices.count == fractions.count else { return [] }
         let sum = max(fractions.reduce(0, +), 1e-12)
+        let covered = sum < 0.999 ? HLFormat.roundSize(total * sum, szDecimals: szDecimals) : total
+        return splitCovered(covered, prices: prices, fractions: fractions.map { $0 / sum }, szDecimals: szDecimals, minValue: minValue)
+    }
+
+    private static func splitCovered(_ total: Double, prices: [Double], fractions: [Double], szDecimals: Int, minValue: Double) -> [TPOrder] {
+        guard total > 0 else { return [] }
+        let sum = 1.0
         var out: [TPOrder] = []
         var left = HLFormat.roundSize(total, szDecimals: szDecimals)
         var carry = 0.0
