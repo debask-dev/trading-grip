@@ -711,6 +711,17 @@ final class ChartCanvas: NSView {
             placed.append(r)
             return r
         }
+        // All lines and axis tags first, so no line runs through a label drawn earlier.
+        for line in lines where !line.quiet {
+            let px = isDraggingLine(line.id) ? (dragPrice ?? line.price) : line.price
+            let rawY = y(px)
+            guard rawY >= plot.minY + 12 && rawY <= plot.maxY - 12 else { continue }
+            let yy = align(rawY) + 0.5 / pixelRatio
+            let hot = isDraggingLine(line.id) || hover == .line(line.id)
+            line.color.setStroke()
+            hline(yy, from: plot.minX, to: plot.maxX, width: line.emphasized ? 2 : (hot ? 2 : 1.4), dash: line.dashed ? (line.meter ? [2, 3] : [6, 4]) : nil)
+            axisTag(px, at: yy, bg: line.color, fg: Palette.bg)
+        }
         // The position bar first: it is the widest and the one to keep in place.
         let ordered = lines.filter { $0.meter } + lines.filter { !$0.meter }
         for line in ordered {
@@ -731,12 +742,6 @@ final class ChartCanvas: NSView {
                 text((labelFor?(line.id, px) ?? "BE") + " " + Fmt.price(px), at: CGPoint(x: r.minX + 6, y: yy),
                      font: .monospacedDigitSystemFont(ofSize: 10, weight: .semibold), color: Palette.muted, align: .left)
                 continue
-            }
-
-            if !offscreen {
-                line.color.setStroke()
-                hline(yy, from: plot.minX, to: plot.maxX, width: line.emphasized ? 2 : (hot ? 2 : 1.4), dash: line.dashed ? (line.meter ? [2, 3] : [6, 4]) : nil)
-                axisTag(px, at: yy, bg: line.color, fg: Palette.bg)
             }
 
             var label = labelFor?(line.id, px) ?? ""
