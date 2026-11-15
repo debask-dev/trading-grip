@@ -356,8 +356,8 @@ final class AppState: ObservableObject {
     @Published var quickPct: Double = UserDefaults.standard.object(forKey: "quickPct") as? Double ?? 10 {
         didSet { defaults.set(quickPct, forKey: "quickPct"); syncQuickTicket() }
     }
-    @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 {
-        didSet { defaults.set(quickLev, forKey: "quickLev"); syncQuickTicket() }
+    @Published var fastLev: Int = UserDefaults.standard.object(forKey: "fastLev") as? Int ?? 5 {
+        didSet { defaults.set(fastLev, forKey: "fastLev"); syncQuickTicket() }
     }
     /// A Risico/Bedrag order you were preparing, kept aside while you are in Snel.
     var ticketBeforeQuick: [String: Ticket] = [:]

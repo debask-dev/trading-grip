@@ -129,13 +129,13 @@ struct QuickCard: View {
             }
             chipRow(T("Hefboom")) {
                 ForEach([3, 5, 10, 20].filter { Double($0) <= maxLev }, id: \.self) { l in
-                    Button("\(l)×") { state.quickLev = l }.buttonStyle(ChipStyle(active: state.quickLeverage == l))
+                    Button("\(l)×") { state.fastLev = l }.buttonStyle(ChipStyle(active: state.quickLeverage == l))
                 }
                 NumberField(value: Double(state.quickLeverage), step: 1, decimals: 0, range: 1...maxLev, suffix: T("×"), width: 36) {
-                    state.quickLev = Int($0.rounded())
+                    state.fastLev = Int($0.rounded())
                 }
             }
-            if let pos = state.position, pos.leverage > state.quickLev {
+            if let pos = state.position, pos.leverage > state.fastLev {
                 Text(T("Hefboom blijft \(pos.leverage)× zolang je positie open is."))
                     .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
             }

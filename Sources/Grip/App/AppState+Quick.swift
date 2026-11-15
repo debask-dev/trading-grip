@@ -10,7 +10,7 @@ extension AppState {
 
     /// Leverage for the Snel order: as chosen, never below the open position's, at most what the market allows.
     var quickLeverage: Int {
-        min(max(quickLev, position?.leverage ?? 1, 1), asset?.maxLeverage ?? 50)
+        min(max(fastLev, position?.leverage ?? 1, 1), asset?.maxLeverage ?? 50)
     }
 
     /// Why the Snel order cannot go (nil = it can).
