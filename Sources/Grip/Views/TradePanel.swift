@@ -467,11 +467,22 @@ struct TicketCard: View {
                             NumberField(value: tp.price, step: state.priceTick, decimals: priceDecimals, grouping: true, color: Theme.green,
                                         range: state.priceTick...1e12, width: t.tps.count > 1 ? 64 : 96) { state.setTicketTP(i, $0) }
                         }
+                        if t.tps.count > 1 || more || tp.pct < 99.5 {
+                            NumberField(value: tp.pct, step: 5, decimals: 0, range: 1...100, suffix: "%", width: 34) { state.setTPPct(i, $0) }
+                        }
                         if t.tps.count > 1 {
-                            NumberField(value: tp.pct, step: 5, decimals: 0, range: 5...95, suffix: "%", width: 34) { state.setTPPct(i, $0) }
                             RemoveButton(help: T("Take-profit weghalen")) { state.removeTicketTP(i) }
                         }
                     }
+                }
+            }
+            if !t.tps.isEmpty && state.ticketTPCover < 99.5 {
+                CoverageBar(levels: t.tps.map(\.pct))
+                HStack {
+                    Text(T("\(Int((100 - state.ticketTPCover).rounded()))% zonder TP · loopt tot je stop")).font(.system(size: 11)).foregroundStyle(Theme.orange)
+                    Spacer()
+                    Button(T("+ TP voor rest")) { state.addTicketTP() }.buttonStyle(ChipStyle(active: false))
+                        .disabled(t.tps.count >= 5)
                 }
             }
             if more {
@@ -591,6 +602,8 @@ struct PositionSummary: View {
                 HStack {
                     SidePill(isLong: pos.isLong)
                     Text(state.fmt.size(pos.size, coin: state.coin, decimals: state.szDecimals)).mono(11.5)
+                    Text(T("marge \(state.fmt.usd(pos.marginUsed, decimals: pos.marginUsed < 100 ? 2 : 0))")).mono(10.5).foregroundStyle(Theme.dim)
+                        .help(T("Marge die deze positie vastzet"))
                     Spacer()
                     Text(state.fmt.signedUsd(u)).mono(13, .semibold).foregroundStyle(Theme.pnl(u))
                     Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.dim)
@@ -626,6 +639,7 @@ struct PositionTab: View {
                 Text(T("netto na fees\((ot?.funding ?? 0) != 0 ? " en funding" : "")")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
                 VStack(spacing: 5) {
                     KV(T("Grootte · hefboom"), T("\(state.fmt.size(pos.size, coin: state.coin, decimals: state.szDecimals)) · \(pos.leverage)× \(pos.isCross ? "cross" : "isolated")"))
+                    MarginRow(pos: pos)
                     KV(T("Gem. entry"), Fmt.price(pos.entryPx), color: Theme.blue)
                     if let be = state.breakEven { KV(T("Break-even"), Fmt.price(be), color: Theme.muted) }
                     KV(T("Stop-loss"), sl.map { Fmt.price($0.displayPx) } ?? T("geen"), color: sl == nil ? Theme.orange : Theme.red)
@@ -691,6 +705,21 @@ struct PositionTab: View {
             .frame(maxWidth: .infinity)
             OrdersCard()
         }
+    }
+}
+
+/// Margin the position ties up: in dollars, as part of the account and, with a margin budget, of one slot.
+struct MarginRow: View {
+    @EnvironmentObject var state: AppState
+    let pos: Position
+    var body: some View {
+        let eq = max(state.account.accountValue, 1e-9)
+        let slot = state.budgetActive ? pos.marginUsed / max(state.slotMargin, 1e-9) : nil
+        var text = "\(state.fmt.usd(pos.marginUsed, decimals: 2)) · \(Fmt.percent(pos.marginUsed / eq, decimals: 1, signed: false))"
+        if let slot { text += T(" · \(Int((slot * 100).rounded()))% van vak") }
+        let slotNote = slot != nil ? T("; een vak is \(state.fmt.usd(state.slotMargin)) (1/\(state.maxPositions) van je account)") : ""
+        return KV(T("Marge"), text, color: (slot ?? 0) > 1 ? Theme.orange : Theme.text)
+            .help(T("Marge die deze positie vastzet (positiewaarde ÷ hefboom\(pos.isCross ? ", cross" : ", isolated")). Het percentage is van je portfolio\(slotNote)."))
     }
 }
 

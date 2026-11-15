@@ -147,7 +147,9 @@ extension AppState {
         } else if t.riskSized {
             if adding, let sl = existingStopOrder { t.stopLoss = sl.displayPx }
             if !(adding && !existingTPOrders.isEmpty) {
-                let split = lastSplit.isEmpty ? [100] : lastSplit
+                // The last split, but a new trade starts with take-profits for the whole position.
+                var split = lastSplit.isEmpty ? [100] : lastSplit
+                split[split.count - 1] += max(100 - split.reduce(0, +), 0)
                 let edge = long ? vis.hi - span * 0.04 : vis.lo + span * 0.04
                 for (i, pct) in split.enumerated() {
                     var px = entry + dir * risk * (1.5 + Double(i))
@@ -303,9 +305,15 @@ extension AppState {
         let dir: Double = t.isLong ? 1 : -1
         let risk = t.useStopLoss ? abs(t.entry - t.stopLoss) : price * 0.005
         let last = t.tps.last?.price ?? t.entry
+        let open = 100 - t.tps.reduce(0) { $0 + $1.pct }
         t.tps.append(TPLevel(price: roundToTick(px ?? (last + dir * max(risk, priceTick * 4))), pct: 0))
         let n = t.tps.count
-        t.tps = applySplit(lastSplit.count == n ? lastSplit : defaultSplit(n), to: t.tps)
+        if n > 1 && open >= 1 {
+            // Take-profits that closed only part: the new one takes the part that had none.
+            t.tps[n - 1].pct = open
+        } else {
+            t.tps = applySplit(lastSplit.count == n ? lastSplit : defaultSplit(n), to: t.tps)
+        }
         ticket = t
         lastSplit = t.tps.map(\.pct)
     }
@@ -318,10 +326,17 @@ extension AppState {
         ticket = t
     }
 
+    /// Sets one take-profit's share. Together they may close less than 100% (the rest runs until the stop), never more.
     func setTPPct(_ i: Int, _ value: Double) {
-        setPct(\.tps, i, value)
-        if let t = ticket { lastSplit = t.tps.map(\.pct) }
+        guard var t = ticket, t.tps.indices.contains(i) else { return }
+        let others = t.tps.reduce(0) { $0 + $1.pct } - t.tps[i].pct
+        t.tps[i].pct = min(max(value.rounded(), 1), max(100 - others, 1))
+        ticket = t
+        lastSplit = t.tps.map(\.pct)
     }
+
+    /// Share of the position the ticket's take-profits close together (0...100).
+    var ticketTPCover: Double { min(ticket?.tps.reduce(0) { $0 + $1.pct } ?? 0, 100) }
 
     func applySplitPreset(_ parts: [Double]) {
         guard var t = ticket else { return }
@@ -422,7 +437,7 @@ extension AppState {
             let ladder = t.tps.filter { isBuy ? $0.price > avg : $0.price < avg }
             // A single fresh entry goes in one go with its stop and (one) take-profit linked to it, so you see them
             // on Hyperliquid straight away. Everything else Grip keeps in line itself after the fills.
-            let attachTP = pos == nil && entryCount == 1 && ladder.count == 1 && pl.size * ladder[0].price >= TradeKeeper.minOrderValue
+            let attachTP = pos == nil && entryCount == 1 && ladder.count == 1 && ladder[0].pct >= 99.5 && pl.size * ladder[0].price >= TradeKeeper.minOrderValue
             let simple = pos == nil && entryCount == 1 && (stop != nil || attachTP)
             if simple, let stop {
                 reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: pl.size, limitPx: stop, reduceOnly: true,
@@ -444,7 +459,8 @@ extension AppState {
             if let stop { m.stop = stop }
             for st in statuses.prefix(entryCount) { if case .resting(let oid) = st { m.entryOids.append(oid); orderKinds[oid] = .limit } }
             if !ladder.isEmpty && !(simple && attachTP) {
-                let total = max(ladder.reduce(0) { $0 + $1.pct }, 1)
+                // Under 100% together: only that part gets a take-profit, the rest runs until the stop.
+                let total = max(ladder.reduce(0) { $0 + $1.pct }, 100)
                 // Placed by the keeper at the first fill; when adding, this new ladder replaces the old take-profits.
                 m.tps = PendingTPs(entryOid: 0, isLong: isBuy, prices: ladder.map(\.price), fractions: ladder.map { $0.pct / total })
             }

@@ -633,5 +633,10 @@ Take-profits niet aangepast: {}	Take-profits not changed: {}
 {} aangepast: {} @ {}	{} changed: {} @ {}
 Order niet aangepast: {}	Order not changed: {}
 TP{} · {}%  {}  · nieuw	TP{} · {}%  {}  · new
+marge {}	margin {}
+Marge die deze positie vastzet	Margin this position ties up
+ · {}% van vak	 · {}% of slot
+Marge die deze positie vastzet (positiewaarde ÷ hefboom{}). Het percentage is van je portfolio{}.	Margin this position ties up (position value ÷ leverage{}). The percentage is of your portfolio{}.
+; een vak is {} (1/{} van je account)	; a slot is {} (1/{} of your account)
 """#
 #endif
