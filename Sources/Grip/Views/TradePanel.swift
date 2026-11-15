@@ -20,6 +20,9 @@ struct TradePanel: View {
                 .labelsHidden()
 
                 switch state.panelMode {
+                case .fast:
+                    QuickCard()
+                    if state.position != nil { PositionSummary() }
                 case .risk, .amount:
                     if state.ticket != nil && state.ticket?.reduceOnly != true {
                         TicketCard()
@@ -83,6 +86,112 @@ struct NewTradeButtons: View {
                  : T("Je kiest zelf hoeveel en met welke hefboom. Stop en take-profit zijn optioneel."))
                 .font(.system(size: 11)).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
         }
+    }
+}
+
+// MARK: - Snel
+
+/// Snel: long or short, market or limit, % of the account as margin, place. Stop and TPs come afterwards.
+struct QuickCard: View {
+    @EnvironmentObject var state: AppState
+    private var priceDecimals: Int { max(0, -Int(floor(log10(state.priceTick) + 1e-9))) }
+
+    var body: some View {
+        let pl = state.ticket != nil ? state.plan : nil
+        let long = state.quickLong
+        let sideColor = long ? Theme.green : Theme.red
+        let maxLev = Double(state.asset?.maxLeverage ?? 50)
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(spacing: 6) {
+                sideButton(true)
+                sideButton(false)
+            }
+            HStack(spacing: 8) {
+                Picker("", selection: $state.quickMarket) {
+                    Text(T("Market")).tag(true)
+                    Text(T("Limit")).tag(false)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 130)
+                Spacer(minLength: 4)
+                if state.quickMarket {
+                    Text("≈ " + Fmt.price(state.price)).mono(12).foregroundStyle(Theme.muted)
+                } else if let e = state.ticket?.entry {
+                    NumberField(value: e, step: state.priceTick, decimals: priceDecimals, grouping: true, color: Theme.blue,
+                                range: state.priceTick...1e12) { v in state.ticket?.entry = state.roundToTick(v) }
+                        .help(T("Limietprijs. Je kunt ook de lijn in de chart slepen."))
+                }
+            }
+            chipRow(T("Marge: % van je portfolio")) {
+                ForEach([5.0, 10, 25, 50], id: \.self) { p in
+                    Button("\(Int(p))%") { state.quickPct = p }.buttonStyle(ChipStyle(active: state.quickPct == p))
+                }
+                NumberField(value: state.quickPct, step: 1, decimals: 0, range: 1...100, suffix: "%", width: 36) { state.quickPct = $0 }
+            }
+            chipRow(T("Hefboom")) {
+                ForEach([3, 5, 10, 20].filter { Double($0) <= maxLev }, id: \.self) { l in
+                    Button("\(l)×") { state.quickLev = l }.buttonStyle(ChipStyle(active: state.quickLeverage == l))
+                }
+                NumberField(value: Double(state.quickLeverage), step: 1, decimals: 0, range: 1...maxLev, suffix: T("×"), width: 36) {
+                    state.quickLev = Int($0.rounded())
+                }
+            }
+            if let pos = state.position, pos.leverage > state.quickLev {
+                Text(T("Hefboom blijft \(pos.leverage)× zolang je positie open is."))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim)
+            }
+            VStack(spacing: 3) {
+                KV(T("Marge"), state.fmt.usd(state.quickMargin, decimals: 2) + " · \(state.quickLeverage)×")
+                    .help(state.isExampleEquity ? T("Voorbeeld met $10.000: koppel je account voor echte bedragen.") : "")
+                if let pl {
+                    KV(T("Positie"), state.fmt.size(pl.size, coin: state.coin, decimals: state.szDecimals) + " · " + state.fmt.usd(pl.size * pl.avgEntry))
+                    if pl.estLiquidationPx > 0 { KV(T("Liquidatie"), Fmt.price(pl.estLiquidationPx), color: Theme.red) }
+                }
+            }
+            if let why = state.quickBlocked {
+                Label(why, systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(Theme.orange)
+            } else if let w = pl?.warnings.first {
+                Label(T(w), systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(Theme.orange)
+            }
+            Button { state.placeQuick() } label: {
+                Text(T("\(long ? "Long" : "Short") \(Int(state.quickPct))% · \(state.quickMarket ? "market" : "limit " + Fmt.price(state.ticket?.entry ?? state.price))"))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(BigButtonStyle(color: sideColor, textColor: long ? Color(nsColor: NSColor(hex: 0x04150E)) : .white))
+            .disabled(state.busy || state.quickBlocked != nil || (pl?.size ?? 0) <= 0)
+            Text(state.quickMarket ? T("Direct, zonder vraag. Stop en take-profit zet je daarna in Positie.")
+                                   : T("De limit staat als lijn in de chart; sleep om de prijs te kiezen. Stop en take-profit daarna."))
+                .font(.system(size: 10.5)).foregroundStyle(Theme.dim).multilineTextAlignment(.center).frame(maxWidth: .infinity)
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
+        .onAppear { state.syncQuickTicket() }
+        .onChange(of: state.coin) { state.syncQuickTicket() }
+        .onChange(of: state.ticket == nil) { state.syncQuickTicket() }
+        .onChange(of: state.price > 0) { state.syncQuickTicket() }
+    }
+
+    private func chipRow<C: View>(_ label: String, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(label).font(.system(size: 11.5)).foregroundStyle(Theme.muted)
+            HStack(spacing: 4) { content() }
+        }
+    }
+
+    private func sideButton(_ long: Bool) -> some View {
+        let on = state.quickLong == long
+        let c = long ? Theme.green : Theme.red
+        return Button { state.quickLong = long } label: {
+            Label(long ? T("Long") : T("Short"), systemImage: long ? "arrow.up.right" : "arrow.down.right")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(maxWidth: .infinity).padding(.vertical, 8)
+                .foregroundStyle(on ? c : Theme.muted)
+                .background(RoundedRectangle(cornerRadius: 8).fill(on ? c.opacity(0.16) : Color.clear))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(on ? c.opacity(0.6) : Theme.line))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(long ? T("Long (⌥L)") : T("Short (⌥S)"))
     }
 }
 

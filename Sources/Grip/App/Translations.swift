@@ -674,5 +674,14 @@ Eerdere trades tonen	Show earlier trades
 Eerdere trades verbergen (⌥P)	Hide earlier trades (⌥P)
 Eerdere trades tonen (⌥P)	Show earlier trades (⌥P)
 Terug naar nu (End)	Back to now (End)
+Snel	Quick
+Marge: % van je portfolio	Margin: % of your portfolio
+Limietprijs. Je kunt ook de lijn in de chart slepen.	Limit price. You can also drag the line in the chart.
+Hefboom blijft {}× zolang je positie open is.	Leverage stays {}× while your position is open.
+Je zit {} in {}. Verkleinen of sluiten doe je in Positie.	You are {} in {}. Reduce or close in the Position tab.
+In trade. Zet nu je stop en take-profits.	In the trade. Now set your stop and take-profits.
+Direct, zonder vraag. Stop en take-profit zet je daarna in Positie.	Immediately, without asking. Set stop and take-profit afterwards in Position.
+De limit staat als lijn in de chart; sleep om de prijs te kiezen. Stop en take-profit daarna.	The limit is a line in the chart; drag it to choose the price. Stop and take-profit afterwards.
+Voorbeeld met $10.000: koppel je account voor echte bedragen.	Example with $10,000: connect your account for real amounts.
 """#
 #endif

@@ -113,6 +113,13 @@ extension AppState {
     func newTicket(long: Bool, entry atPrice: Double? = nil) {
         let p = price
         guard p > 0 else { return }
+        if panelMode == .fast {
+            // ⌥L / ⌥S in Snel just pick the side.
+            quickLong = long
+            if let atPrice { quickMarket = false; ticket?.entry = roundToTick(atPrice) }
+            tab = .trade
+            return
+        }
         let pos = position
         if let pos, pos.isLong != long, panelMode != .position {
             let side = pos.isLong ? "long" : "short"
@@ -174,8 +181,20 @@ extension AppState {
     }
 
     func panelModeChanged(_ old: PanelMode) {
+        if old == .fast {
+            // Leaving Snel: drop its order, bring back what you were preparing.
+            ticket = ticketBeforeQuick.removeValue(forKey: coin)
+        }
+        if panelMode == .fast {
+            if old != .fast, let t = ticket, !t.reduceOnly { ticketBeforeQuick[coin] = t }
+            ticket = nil
+            syncQuickTicket()
+            return
+        }
         guard var t = ticket else { return }
         switch panelMode {
+        case .fast:
+            break
         case .risk:
             if t.reduceOnly { ticket = nil; return }
             t.riskSized = true

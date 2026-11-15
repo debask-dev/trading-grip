@@ -69,6 +69,12 @@ jobs:
           sleep 5
           screencapture -x smoke/screen-2.png || true
           osascript -e 'tell application "Grip" to quit' || pkill -x Grip || true
+          # Once more with the Snel tab open (the argument overrides the stored tab for this launch only).
+          sleep 3
+          open smoke/Grip.app --args -GripSkipOnboarding YES -GripDemoPosition YES -panelMode fast
+          sleep 20
+          screencapture -x smoke/screen-3.png || true
+          osascript -e 'tell application "Grip" to quit' || pkill -x Grip || true
 
       - name: Upload screenshots
         if: always()

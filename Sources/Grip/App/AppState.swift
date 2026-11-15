@@ -26,12 +26,13 @@ struct TPLevel: Equatable, Identifiable {
 
 enum SizeLock: String { case risk, size }
 
-/// The three trade tabs.
+/// The trade tabs.
 enum PanelMode: String, CaseIterable, Identifiable {
-    case risk, amount, position
+    case fast, risk, amount, position
     var id: String { rawValue }
     var label: String {
         switch self {
+        case .fast: return T("Snel")
         case .risk: return T("Risico")
         case .amount: return T("Bedrag")
         case .position: return T("Positie")
@@ -42,6 +43,7 @@ enum PanelMode: String, CaseIterable, Identifiable {
         switch raw {
         case "amount", "quick", "manual": return .amount
         case "position": return .position
+        case "fast": return .fast
         default: return .risk
         }
     }
@@ -346,6 +348,19 @@ final class AppState: ObservableObject {
     // Bedrag tab: last used values
     @Published var amountValue: Double = UserDefaults.standard.object(forKey: "amountValue") as? Double ?? 50 { didSet { defaults.set(amountValue, forKey: "amountValue") } }
     @Published var amountUnit: AmountUnit = AmountUnit(rawValue: UserDefaults.standard.string(forKey: "amountUnit") ?? "") ?? .margin { didSet { defaults.set(amountUnit.rawValue, forKey: "amountUnit") } }
+    // Snel tab: side, market/limit, % of the account as margin, leverage. Remembered.
+    @Published var quickLong = true { didSet { syncQuickTicket() } }
+    @Published var quickMarket: Bool = UserDefaults.standard.object(forKey: "quickMarket") as? Bool ?? true {
+        didSet { defaults.set(quickMarket, forKey: "quickMarket"); syncQuickTicket() }
+    }
+    @Published var quickPct: Double = UserDefaults.standard.object(forKey: "quickPct") as? Double ?? 10 {
+        didSet { defaults.set(quickPct, forKey: "quickPct"); syncQuickTicket() }
+    }
+    @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 {
+        didSet { defaults.set(quickLev, forKey: "quickLev"); syncQuickTicket() }
+    }
+    /// A Risico/Bedrag order you were preparing, kept aside while you are in Snel.
+    var ticketBeforeQuick: [String: Ticket] = [:]
     @Published var amountLev: Int = UserDefaults.standard.object(forKey: "amountLev") as? Int ?? 5 { didSet { defaults.set(amountLev, forKey: "amountLev") } }
     @Published var amountUseStop: Bool = UserDefaults.standard.object(forKey: "amountUseStop") as? Bool ?? true { didSet { defaults.set(amountUseStop, forKey: "amountUseStop") } }
     @Published var amountSLPct: Double = UserDefaults.standard.object(forKey: "amountSLPct") as? Double ?? 1.0 { didSet { defaults.set(amountSLPct, forKey: "amountSLPct") } }
@@ -516,11 +531,14 @@ final class AppState: ObservableObject {
     private func demoPracticePosition() async {
         paperMode = true
         resetPaper(balance: 10_000)
+        let mode = panelMode
+        panelMode = .risk      // the demo order is a Risico order with two TPs
         newTicket(long: true)
         ticket?.isMarket = true
-        while (ticket?.tps.count ?? 0) < 2 { addTicketTP() }
+        for _ in 0..<2 where (ticket?.tps.count ?? 0) < 2 { addTicketTP() }
         applySplitPreset([50, 50])
         await placeTicket()
+        panelMode = mode
         dockExpanded = true
         dockTab = 0
     }
