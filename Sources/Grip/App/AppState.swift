@@ -122,6 +122,15 @@ enum LineID: Hashable {
 }
 
 /// A buy/sell marker on the chart.
+/// A fill alert waiting to be merged with the next parts (see `notifyFill`).
+struct PendingAlert {
+    var event: TradeEvent
+    var title: String
+    var body: String
+    var count: Int
+    var work: DispatchWorkItem?
+}
+
 struct ChartMarker: Identifiable, Equatable {
     let id: String
     let time: Int64
@@ -298,6 +307,10 @@ final class AppState: ObservableObject {
     @Published var feeRates: FeeRates = .base
     @Published var fundingPayments: [FundingPayment] = []
     @Published var orderKinds: [Int64: OrderKindTag] = [:]
+    /// Fills already announced (a fill can come in twice when history refreshes overlap).
+    var announcedTids: Set<Int64> = []
+    /// Trade alerts waiting a moment so the parts of one fill (or a ladder) give one sound and one banner.
+    var pendingAlerts: [String: PendingAlert] = [:]
     @Published var analysis = TradeAnalysis(closed: [], open: [:])
     @Published var pendingConfirm: ConfirmRequest?
     @Published var chartFocus: ChartFocus?
@@ -335,6 +348,10 @@ final class AppState: ObservableObject {
     @Published var tpInPct: Bool = UserDefaults.standard.bool(forKey: "tpInPct") { didSet { defaults.set(tpInPct, forKey: "tpInPct") } }
     /// Markets open as tabs (in this order). Markets with a position or order always get a tab too.
     @Published var openMarkets: [String] = UserDefaults.standard.stringArray(forKey: "openMarkets") ?? [] { didSet { defaults.set(openMarkets, forKey: "openMarkets") } }
+    /// Colour label per market tab (index into `TabColor.all`).
+    @Published var tabColors: [String: Int] = (UserDefaults.standard.dictionary(forKey: "tabColors") as? [String: Int]) ?? [:] {
+        didSet { UserDefaults.standard.set(tabColors, forKey: "tabColors") }
+    }
     var tabTimeframes: [String: String] = (UserDefaults.standard.dictionary(forKey: "tabTimeframes") as? [String: String]) ?? [:] {
         didSet { UserDefaults.standard.set(tabTimeframes, forKey: "tabTimeframes") }
     }
@@ -601,6 +618,7 @@ final class AppState: ObservableObject {
 
     private func accountChanged() {
         account = .empty
+        announcedTids = []
         fills = []
         closedTrades = []
         portfolio = [:]
@@ -864,12 +882,14 @@ final class AppState: ObservableObject {
 
     func resetPaper(balance: Double) {
         paper.reset(balance: balance)
+        announcedTids = []      // practice fill ids start at 1 again
         paperChanged()
         toast(T("Oefenaccount gereset naar \(fmt.usd(balance))"), .info)
     }
 
     private func modeChanged() {
         account = .empty
+        announcedTids = []
         fills = []
         closedTrades = []
         portfolio = [:]
@@ -1411,8 +1431,31 @@ extension AppState {
         Notifier.shared.post(e, title: T(title), body: T(body), pref: pref(e), important: e == .entryFilled || e == .stopLoss || e == .takeProfit || e == .positionClosed)
     }
 
+    /// A fill alert for a coin. Alerts for the same coin within a short moment are merged into one
+    /// sound and one banner: an order filled in parts, an entry ladder, a stop that closes the trade.
+    /// The latest (most complete) message wins; entries keep their first title ("geopend").
+    func notifyFill(_ e: TradeEvent, coin c: String, _ title: String, _ body: String) {
+        var a = pendingAlerts[c] ?? PendingAlert(event: e, title: title, body: body, count: 0)
+        a.count += 1
+        if !(e == .entryFilled && a.event == .entryFilled) { a.title = title }
+        a.event = e
+        a.body = body
+        a.work?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, let a = self.pendingAlerts.removeValue(forKey: c) else { return }
+            let more = a.count > 1 ? " · \(a.count) fills" : ""
+            self.notify(a.event, a.title, a.body + more)
+        }
+        a.work = work
+        pendingAlerts[c] = a
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
     /// Turns new fills into clear messages: entry, take-profit, stop-loss, closed trade with net result.
-    func announce(_ newFills: [Fill]) {
+    func announce(_ incoming: [Fill]) {
+        // Overlapping history refreshes can both see the same new fill: announce each fill once.
+        let newFills = incoming.filter { !announcedTids.contains($0.tid) }
+        announcedTids.formUnion(newFills.map(\.tid))
         guard !newFills.isEmpty else { return }
         let byOrder = Dictionary(grouping: newFills) { "\($0.coin)-\($0.oid)" }
         for (_, group) in byOrder.sorted(by: { ($0.value.first?.time ?? 0) < ($1.value.first?.time ?? 0) }) {
@@ -1426,7 +1469,7 @@ extension AppState {
             let sizeText = fmt.size(qty, coin: c, decimals: 4)
             if opening {
                 let side = end > 0 ? T("Long") : T("Short")
-                notify(.entryFilled, start == 0 ? T("\(side) \(c) geopend") : T("\(side) \(c) bijgekocht"), "\(sizeText) @ \(Fmt.price(px))")
+                notifyFill(.entryFilled, coin: c, start == 0 ? T("\(side) \(c) geopend") : T("\(side) \(c) bijgekocht"), "\(sizeText) @ \(Fmt.price(px))")
                 toast("\(start == 0 ? "In trade" : "Bijgekocht"): \(side.lowercased()) \(sizeText) @ \(Fmt.price(px))", .success)
                 continue
             }
@@ -1435,18 +1478,18 @@ extension AppState {
             if abs(end) < 1e-9, let trade = analysis.closed.first(where: { $0.coin == c }) {
                 let r = trade.rMultiple.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? ""
                 let how = kind == .stopLoss ? T("Stop-loss") : (kind == .takeProfit ? T("Take-profit") : T("Gesloten"))
-                notify(trade.isWin ? .positionClosed : (kind == .stopLoss ? .stopLoss : .positionClosed),
+                notifyFill(trade.isWin ? .positionClosed : (kind == .stopLoss ? .stopLoss : .positionClosed), coin: c,
                        T("\(c)-trade gesloten (\(how))"), T("Netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r) · fees \(fmt.usd(trade.fees, decimals: 2))"))
                 toast(T("Trade gesloten: netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r)"), trade.isWin ? .success : .info)
             } else if kind == .stopLoss {
-                notify(.stopLoss, T("Stop-loss \(c) geraakt"), "\(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
+                notifyFill(.stopLoss, coin: c, T("Stop-loss \(c) geraakt"), "\(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
                 toast(T("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))"), .info)
             } else {
                 let label = analysis.open[c]?.executions.last(where: { $0.oid == first.oid })?.label ?? T("Deel")
                 if kind == .takeProfit && breakEvenAfterTP.contains(c) {
                     Task { await self.refreshAccount(); await self.moveStopToBreakEven(coin: c) }
                 }
-                notify(kind == .takeProfit ? .takeProfit : .positionClosed, T("\(label) \(c) gevuld"), T("\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"))
+                notifyFill(kind == .takeProfit ? .takeProfit : .positionClosed, coin: c, T("\(label) \(c) gevuld"), T("\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"))
                 toast(T("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"), realized >= 0 ? .success : .info)
             }
         }

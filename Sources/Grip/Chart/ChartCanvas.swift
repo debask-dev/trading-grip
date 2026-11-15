@@ -486,25 +486,29 @@ final class ChartCanvas: NSView {
         v.lineWidth = 1
         v.stroke()
 
-        // Time labels
+        // Time labels on round local times (every 15 min, hour, 4 h, day …): the same candles keep
+        // their label while scrolling, so nothing jumps.
         guard let vis = visibleIndices() else { return }
-        let barsPerLabel = max(1, Int((110 / spacing).rounded(.up)))
+        let step = TimeAxis.step(timeframe: timeframe, barSpacing: Double(spacing))
         let tfIntraday = timeframe.milliseconds < 86_400_000
-        var lastDay = -1
-        for i in vis {
+        let lo = max(vis.lowerBound - 1, 0), hi = min(vis.upperBound + 1, candles.count - 1)
+        // A label at the edge slides out under the price axis instead of popping away.
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: plot.maxX, height: bounds.height)).addClip()
+        for i in lo...hi {
             let c = candles[i]
-            let slot = c.time / timeframe.milliseconds
-            guard slot % Int64(barsPerLabel) == 0 else { continue }
             let date = Date(timeIntervalSince1970: Double(c.time) / 1000)
-            let day = Calendar.current.component(.day, from: date)
+            let offset = Int64(TimeZone.current.secondsFromGMT(for: date)) * 1000
+            guard TimeAxis.isLabel(time: c.time, step: step, timeframe: timeframe, utcOffset: offset) else { continue }
             if tfIntraday {
-                timeFormatter.dateFormat = (day != lastDay && Calendar.current.component(.hour, from: date) < 2) ? "d MMM" : "HH:mm"
+                let midnight = ((c.time + offset) % 86_400_000) == 0
+                timeFormatter.dateFormat = midnight ? "d MMM" : "HH:mm"
             } else {
-                timeFormatter.dateFormat = timeframe == .w1 ? "d MMM ''yy" : "d MMM"
+                timeFormatter.dateFormat = step >= 182 * 86_400_000 ? "MMM ''yy" : (timeframe == .w1 ? "d MMM ''yy" : "d MMM")
             }
-            lastDay = day
             let xx = align(x(index: Double(i))) + 0.5 / pixelRatio
-            if style.showGrid {
+            if style.showGrid && xx > plot.minX && xx < plot.maxX {
                 Palette.grid.setStroke()
                 let gl = NSBezierPath()
                 gl.move(to: CGPoint(x: xx, y: plot.minY)); gl.line(to: CGPoint(x: xx, y: timeTop))
@@ -838,7 +842,7 @@ final class ChartCanvas: NSView {
         let s = timeFormatter.string(from: Date(timeIntervalSince1970: Double(t) / 1000))
         let font = NSFont.monospacedDigitSystemFont(ofSize: 10.5, weight: .medium)
         let w = (s as NSString).size(withAttributes: [.font: font]).width + 14
-        let r = NSRect(x: min(max(cx - w / 2, plot.minX), plot.maxX - w), y: timeTop + 3, width: w, height: timeHeight - 6)
+        let r = NSRect(x: align(min(max(cx - w / 2, plot.minX), plot.maxX - w)), y: timeTop + 3, width: align(w), height: timeHeight - 6)
         Palette.card.setFill(); NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
         text(s, at: CGPoint(x: r.midX, y: r.midY), font: font, color: Palette.text, align: .center)
     }
@@ -882,10 +886,10 @@ final class ChartCanvas: NSView {
 
     // MARK: Executions
 
-    /// Screen position of a marker: on its candle, at the fill price.
+    /// Screen position of a marker: on the candle the fill happened in (not the one whose open time is
+    /// nearest, which can be the next candle), exactly at the fill price.
     private func markerPoint(_ m: ChartMarker) -> CGPoint? {
-        guard let i = Snap.nearestIndex(time: m.time, candles: candles),
-              abs(candles[i].time - m.time) <= timeframe.milliseconds else { return nil }
+        guard let i = Snap.containingIndex(time: m.time, candles: candles, timeframe: timeframe) else { return nil }
         return CGPoint(x: x(index: Double(i)), y: y(m.price))
     }
 
@@ -900,7 +904,8 @@ final class ChartCanvas: NSView {
             // tick exactly at the fill price
             col.setFill()
             let w = max(6, spacing * 0.9)
-            NSRect(x: p.x - w / 2, y: p.y - 1, width: w, height: 2).fill()
+            let ty = align(p.y)
+            NSRect(x: align(p.x - w / 2), y: ty - 1 / pixelRatio, width: align(w), height: 2 / pixelRatio).fill()
             // arrow: below the price for a buy (pointing up), above for a sell
             let dir: CGFloat = m.isBuy ? 1 : -1
             let tip = CGPoint(x: p.x, y: p.y + dir * 4)
@@ -916,10 +921,16 @@ final class ChartCanvas: NSView {
         }
     }
 
+    /// x of the candle a moment falls in (its middle), so trade links meet the markers.
+    private func candleX(time t: Int64) -> CGFloat {
+        if let i = Snap.containingIndex(time: t, candles: candles, timeframe: timeframe) { return x(index: Double(i)) }
+        return x(index: index(time: t))
+    }
+
     private func drawTradeLinks() {
         for l in tradeLinks {
-            let a = CGPoint(x: x(index: index(time: l.t0)), y: y(l.p0))
-            let b = CGPoint(x: x(index: index(time: l.t1)), y: y(l.p1))
+            let a = CGPoint(x: candleX(time: l.t0), y: y(l.p0))
+            let b = CGPoint(x: candleX(time: l.t1), y: y(l.p1))
             guard max(a.x, b.x) >= plot.minX, min(a.x, b.x) <= plot.maxX else { continue }
             let col = l.isWin ? Palette.green : Palette.red
             let hot = highlightTradeID == l.id || hoveredTrade == l.id
@@ -975,8 +986,8 @@ final class ChartCanvas: NSView {
 
     private func tradeLinkAt(_ p: CGPoint) -> String? {
         for l in tradeLinks {
-            let a = CGPoint(x: x(index: index(time: l.t0)), y: y(l.p0))
-            let b = CGPoint(x: x(index: index(time: l.t1)), y: y(l.p1))
+            let a = CGPoint(x: candleX(time: l.t0), y: y(l.p0))
+            let b = CGPoint(x: candleX(time: l.t1), y: y(l.p1))
             if distance(p, toSegment: a, b) < 5 { return l.id }
         }
         return nil
@@ -1058,6 +1069,8 @@ final class ChartCanvas: NSView {
         case .center: origin.x -= size.width / 2
         case .right: origin.x -= size.width
         }
+        // On whole pixels: text at a fractional position is blurry and shimmers while scrolling.
+        origin = CGPoint(x: align(origin.x), y: align(origin.y))
         (s as NSString).draw(at: origin, withAttributes: attrs)
     }
 

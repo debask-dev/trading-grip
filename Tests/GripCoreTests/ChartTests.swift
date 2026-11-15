@@ -162,3 +162,39 @@ final class StyleTests: XCTestCase {
         XCTAssertFalse(l.extendLeft)
     }
 }
+
+final class TimeAxisTests: XCTestCase {
+    func testMarkerSitsOnTheCandleThatContainsTheFill() {
+        let candles = (0..<4).map { Candle(time: Int64($0) * 900_000, open: 100, high: 101, low: 99, close: 100, volume: 1) }
+        // 12 minutes into the first candle: nearest open time is the second candle, but the fill belongs to the first.
+        XCTAssertEqual(Snap.nearestIndex(time: 720_000, candles: candles), 1)
+        XCTAssertEqual(Snap.containingIndex(time: 720_000, candles: candles, timeframe: .m15), 0)
+        XCTAssertEqual(Snap.containingIndex(time: 900_000, candles: candles, timeframe: .m15), 1)
+        XCTAssertEqual(Snap.containingIndex(time: 3 * 900_000 + 899_999, candles: candles, timeframe: .m15), 3)
+        XCTAssertNil(Snap.containingIndex(time: 4 * 900_000, candles: candles, timeframe: .m15))
+        XCTAssertNil(Snap.containingIndex(time: -1, candles: candles, timeframe: .m15))
+    }
+
+    func testStepIsRoundAndWideEnough() {
+        // 15m bars at 9 pt: 110 pt ≈ 12.2 bars, just over 3 h → 4 h step.
+        XCTAssertEqual(TimeAxis.step(timeframe: .m15, barSpacing: 9), 4 * 3_600_000)
+        XCTAssertEqual(TimeAxis.step(timeframe: .m15, barSpacing: 200), 15 * 60_000)
+        XCTAssertEqual(TimeAxis.step(timeframe: .d1, barSpacing: 9), 14 * 86_400_000)
+    }
+
+    func testLabelsStayOnRoundLocalTimes() {
+        let hour: Int64 = 3_600_000
+        let cet = hour   // UTC+1
+        // 23:00 UTC is midnight in CET: a 4h step labels it.
+        XCTAssertTrue(TimeAxis.isLabel(time: 23 * hour, step: 4 * hour, timeframe: .m15, utcOffset: cet))
+        XCTAssertFalse(TimeAxis.isLabel(time: 0, step: 4 * hour, timeframe: .m15, utcOffset: cet))
+        XCTAssertTrue(TimeAxis.isLabel(time: 3 * hour, step: 4 * hour, timeframe: .m15, utcOffset: cet))
+        // Day step on an hourly chart: local midnight only.
+        XCTAssertTrue(TimeAxis.isLabel(time: 23 * hour, step: 24 * hour, timeframe: .h1, utcOffset: cet))
+        XCTAssertFalse(TimeAxis.isLabel(time: 22 * hour, step: 24 * hour, timeframe: .h1, utcOffset: cet))
+        // Daily candles (UTC midnight) still get labels in any time zone.
+        let day = 24 * hour
+        let labelled = (0..<28).filter { TimeAxis.isLabel(time: Int64($0) * day, step: 7 * day, timeframe: .d1, utcOffset: cet) }
+        XCTAssertEqual(labelled.count, 4)
+    }
+}

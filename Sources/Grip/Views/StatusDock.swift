@@ -471,8 +471,15 @@ struct MarketTab: View {
         let pos = state.account.position(for: market)
         let orders = state.account.orders(for: market).count
         let near = (state.nearestDistance(market) ?? 1) < 0.005
+        let label = TabColor.color(state.tabColors[market])
         HStack(spacing: 6) {
+            if let label {
+                RoundedRectangle(cornerRadius: 1.5).fill(label).frame(width: 3, height: 14)
+            }
             Text(market).font(.system(size: 12, weight: .semibold)).foregroundStyle(on ? Theme.text : Theme.muted)
+            Text(state.tabTimeframe(market).label)
+                .font(.system(size: 10, weight: .medium)).foregroundStyle(on ? Theme.muted : Theme.dim)
+                .padding(.leading, -2)
             if let p = state.livePrice(market) { Text(Fmt.price(p)).mono(11).foregroundStyle(on ? Theme.text : Theme.muted) }
             if let pos {
                 let net = state.net(for: pos)
@@ -495,10 +502,29 @@ struct MarketTab: View {
         }
         .padding(.horizontal, 9).padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 7).fill(on ? Theme.card : (hovering ? Color.white.opacity(0.04) : Color.clear)))
-        .overlay(RoundedRectangle(cornerRadius: 7).stroke(on ? Theme.line : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 7).fill((label ?? .clear).opacity(0.10)))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(on ? (label?.opacity(0.55) ?? Theme.line) : Color.clear))
         .contentShape(Rectangle())
         .onTapGesture { state.coin = market }
         .onHover { hovering = $0 }
+        .help(T("Rechtsklik voor een kleurlabel"))
+        .contextMenu {
+            Menu(T("Kleurlabel")) {
+                ForEach(TabColor.all.indices, id: \.self) { i in
+                    Button {
+                        state.setTabColor(market, i)
+                    } label: {
+                        Text("\(TabColor.all[i].dot)  \(T(TabColor.all[i].name))\(state.tabColors[market] == i ? "  ✓" : "")")
+                    }
+                }
+                Divider()
+                Button(T("Geen kleur")) { state.setTabColor(market, nil) }
+            }
+            if !state.isPinned(market) && state.marketTabs.count > 1 {
+                Divider()
+                Button(T("Tab sluiten")) { state.closeTab(market) }
+            }
+        }
     }
 }
 #endif

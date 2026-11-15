@@ -659,5 +659,15 @@ Netto na fees en funding. Al binnen {} · betaalde fees {} · funding {}	Net aft
 {}% van vak	{}% of slot
 Funding betaald (−) of ontvangen (+) sinds je instapte	Funding paid (−) or received (+) since you entered
 Liquidatieprijs en hoe ver de koers daarvan af is	Liquidation price and how far the price is from it
+Kleurlabel	Color label
+Rood	Red
+Oranje	Orange
+Geel	Yellow
+Groen	Green
+Blauw	Blue
+Paars	Purple
+Geen kleur	No color
+Rechtsklik voor een kleurlabel	Right-click for a color label
+Totaal {}	Total {}
 """#
 #endif

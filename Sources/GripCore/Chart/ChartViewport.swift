@@ -204,3 +204,38 @@ public enum ChartMath {
         return px / pixelRatio
     }
 }
+
+/// Labels on the time axis. They sit on round times (every 15 min, hour, 4 h, day …) in local time,
+/// so the same candles keep their label while you scroll: nothing jumps or flickers.
+public enum TimeAxis {
+    static let minute: Int64 = 60_000
+    static let hour: Int64 = 3_600_000
+    static let day: Int64 = 86_400_000
+    /// Candidate label spacings, smallest first.
+    static let steps: [Int64] = [
+        minute, 5 * minute, 15 * minute, 30 * minute,
+        hour, 2 * hour, 3 * hour, 4 * hour, 6 * hour, 12 * hour,
+        day, 2 * day, 7 * day, 14 * day, 28 * day, 91 * day, 182 * day, 364 * day,
+    ]
+
+    /// Smallest round step that leaves at least `minGap` points between labels.
+    public static func step(timeframe: Timeframe, barSpacing: Double, minGap: Double = 110) -> Int64 {
+        let tf = timeframe.milliseconds
+        let needed = Double(tf) * minGap / max(barSpacing, 0.01)
+        return steps.first { $0 >= tf && Double($0) >= needed } ?? steps.last!
+    }
+
+    /// True when a candle opening at `time` gets a label. `utcOffset` is the local offset in ms, so
+    /// "every 4 hours" means 00:00, 04:00 … on your clock. Daily and weekly candles open at UTC midnight:
+    /// those count whole candles instead.
+    public static func isLabel(time: Int64, step: Int64, timeframe: Timeframe, utcOffset: Int64) -> Bool {
+        func mod(_ a: Int64, _ b: Int64) -> Int64 { ((a % b) + b) % b }
+        let tf = timeframe.milliseconds
+        if tf >= day { return mod(time / tf, max(1, step / tf)) == 0 }
+        let local = time + utcOffset
+        if step < day { return mod(local, step) == 0 }
+        guard mod(local, day) == 0 else { return false }
+        let days = (local - mod(local, day)) / day - 4      // day 0 = Monday 5 Jan 1970
+        return mod(days, step / day) == 0
+    }
+}

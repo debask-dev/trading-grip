@@ -38,6 +38,13 @@ extension AppState {
         if n >= 1 && n <= tabs.count { coin = tabs[n - 1] }
     }
 
+    /// The timeframe a tab shows: its own one, or the current one (a tab you never changed follows along).
+    func tabTimeframe(_ c: String) -> Timeframe {
+        c == coin ? timeframe : (tabTimeframes[c].flatMap(Timeframe.init(rawValue:)) ?? timeframe)
+    }
+
+    func setTabColor(_ c: String, _ index: Int?) { tabColors[c] = index }
+
     func livePrice(_ c: String) -> Double? { c == coin && price > 0 ? price : (liveMids[c] ?? mids[c]) }
 
     /// Distance from the current price to an order, as a fraction (0.003 = 0.3%).

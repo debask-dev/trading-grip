@@ -6,6 +6,9 @@ import GripCore
 struct PortfolioView: View {
     @EnvironmentObject var state: AppState
     @State private var period: PortfolioPeriod = .month
+    @State private var pnlHover: Date?
+    @State private var valueHover: Date?
+    @State private var tradeHover: Int?
 
     var body: some View {
         let series = state.portfolio[period]
@@ -17,6 +20,9 @@ struct PortfolioView: View {
         let pnlPct = start > 0 ? pnlTotal / start : 0
         let f = state.fmt
         let curve = TradeBuilder.equityCurve(state.closedTrades)
+        let trades = state.closedTrades.sorted { $0.closeTime < $1.closeTime }
+        let pnlPoint = pnlHover.flatMap { nearest($0, in: pnl) }
+        let valuePoint = valueHover.flatMap { nearest($0, in: values) }
 
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -53,7 +59,18 @@ struct PortfolioView: View {
                                     .foregroundStyle(Theme.pnl(pnlTotal))
                                     .lineStyle(StrokeStyle(lineWidth: 2))
                                 RuleMark(y: .value(T("Nul"), 0)).foregroundStyle(Theme.dim.opacity(0.4))
+                                if let h = pnlPoint, h.id == p.id {
+                                    RuleMark(x: .value(T("Tijd"), h.time))
+                                        .foregroundStyle(Theme.muted.opacity(0.5))
+                                        .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                                            HoverTip(lines: [dateText(h.time), f.signedUsd(h.value, decimals: 2) + "  ·  " + Fmt.percent(start > 0 ? h.value / start : 0)],
+                                                     color: Theme.pnl(h.value), hide: state.hideAmounts)
+                                        }
+                                    PointMark(x: .value(T("Tijd"), h.time), y: .value(T("PnL"), h.value))
+                                        .foregroundStyle(Theme.pnl(h.value)).symbolSize(40)
+                                }
                             }
+                            .chartXSelection(value: $pnlHover)
                             .chartYAxis(state.hideAmounts ? .hidden : .automatic)
                             .frame(height: 240)
                         }
@@ -67,7 +84,19 @@ struct PortfolioView: View {
                                 LineMark(x: .value(T("Tijd"), p.time), y: .value(T("Waarde"), p.value))
                                     .foregroundStyle(Theme.blue)
                                     .lineStyle(StrokeStyle(lineWidth: 2))
+                                if let h = valuePoint, h.id == p.id {
+                                    RuleMark(x: .value(T("Tijd"), h.time))
+                                        .foregroundStyle(Theme.muted.opacity(0.5))
+                                        .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                                            let change = h.value - start
+                                            HoverTip(lines: [dateText(h.time), f.usd(h.value, decimals: 2) + "  ·  " + f.signedUsd(change, decimals: 2)],
+                                                     color: Theme.blue, hide: state.hideAmounts)
+                                        }
+                                    PointMark(x: .value(T("Tijd"), h.time), y: .value(T("Waarde"), h.value))
+                                        .foregroundStyle(Theme.blue).symbolSize(40)
+                                }
                             }
+                            .chartXSelection(value: $valueHover)
                             .chartYScale(domain: .automatic(includesZero: false))
                             .chartYAxis(state.hideAmounts ? .hidden : .automatic)
                             .frame(height: 200)
@@ -84,8 +113,20 @@ struct PortfolioView: View {
                                     .interpolationMethod(.stepEnd)
                                 PointMark(x: .value(T("Trade"), item.offset + 1), y: .value(T("Cumulatief"), item.element.value))
                                     .foregroundStyle(Theme.accent)
-                                    .symbolSize(18)
+                                    .symbolSize(tradeHover == item.offset + 1 ? 60 : 18)
+                                if let n = tradeHover, n == item.offset + 1, trades.indices.contains(item.offset) {
+                                    let t = trades[item.offset]
+                                    RuleMark(x: .value(T("Trade"), n))
+                                        .foregroundStyle(Theme.muted.opacity(0.5))
+                                        .annotation(position: .top, spacing: 4, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                                            HoverTip(lines: [T("#\(n) · \(t.coin) \(t.isLong ? "long" : "short") · \(dateText(t.closeTime))"),
+                                                             T("Trade \(f.signedUsd(t.netPnl, decimals: 2))") + (t.rMultiple.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? ""),
+                                                             T("Totaal \(f.signedUsd(item.element.value, decimals: 2))")],
+                                                     color: Theme.pnl(t.netPnl), hide: state.hideAmounts)
+                                        }
+                                }
                             }
+                            .chartXSelection(value: Binding(get: { tradeHover }, set: { tradeHover = $0.map { min(max($0, 1), curve.count) } }))
                             .chartXAxisLabel(T("Trade #"))
                             .chartYAxis(state.hideAmounts ? .hidden : .automatic)
                             .frame(height: 200)
@@ -99,6 +140,36 @@ struct PortfolioView: View {
             }
             .padding(22)
         }
+    }
+}
+
+extension PortfolioView {
+    /// The data point closest in time to where the mouse is.
+    func nearest(_ t: Date, in pts: [PortfolioSeries.Point]) -> PortfolioSeries.Point? {
+        pts.min { abs($0.time.timeIntervalSince(t)) < abs($1.time.timeIntervalSince(t)) }
+    }
+
+    func dateText(_ d: Date) -> String {
+        d.formatted(Date.FormatStyle(date: .abbreviated, time: period == .day || period == .week ? .shortened : .omitted)
+            .locale(Locale(identifier: L10n.isEnglish ? "en_US" : "nl_NL")))
+    }
+}
+
+/// Small card above the hovered point in the portfolio charts. With hidden amounts only the first line (the date) shows.
+struct HoverTip: View {
+    let lines: [String]
+    var color: Color = Theme.text
+    var hide = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array((hide ? Array(lines.prefix(1)) : lines).enumerated()), id: \.offset) { i, l in
+                Text(l).font(.system(size: i == 0 ? 10.5 : 11.5, weight: i == 0 ? .regular : .semibold, design: i == 0 ? .default : .monospaced))
+                    .foregroundStyle(i == 0 ? Theme.muted : color)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.panel))
+        .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
     }
 }
 

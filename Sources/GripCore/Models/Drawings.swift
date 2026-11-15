@@ -114,6 +114,18 @@ public enum Snap {
         return ChartPoint(time: c.time, price: best)
     }
 
+    /// The candle that contains `time`: the last one that opened at or before it, if `time` falls within
+    /// that candle's period. A fill at 10:12 belongs to the 10:00 candle on 15m (not to 10:15, which is closer).
+    public static func containingIndex(time: Int64, candles: [Candle], timeframe: Timeframe) -> Int? {
+        guard let first = candles.first, time >= first.time else { return nil }
+        var lo = 0, hi = candles.count - 1
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2
+            if candles[mid].time <= time { lo = mid } else { hi = mid - 1 }
+        }
+        return time < candles[lo].time + timeframe.milliseconds ? lo : nil
+    }
+
     /// Binary search for the candle whose open time is closest to `time`.
     public static func nearestIndex(time: Int64, candles: [Candle]) -> Int? {
         guard !candles.isEmpty else { return nil }

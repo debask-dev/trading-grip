@@ -134,3 +134,16 @@ extension View {
     }
 }
 #endif
+
+#if os(macOS)
+import SwiftUI
+
+/// Colour labels for market tabs (right-click a tab).
+enum TabColor {
+    static let all: [(name: String, dot: String, color: Color)] = [
+        ("Rood", "🔴", Theme.red), ("Oranje", "🟠", Theme.orange), ("Geel", "🟡", Color(nsColor: Palette.yellow)),
+        ("Groen", "🟢", Theme.green), ("Blauw", "🔵", Theme.blue), ("Paars", "🟣", Theme.accent),
+    ]
+    static func color(_ i: Int?) -> Color? { i.flatMap { all.indices.contains($0) ? all[$0].color : nil } }
+}
+#endif
