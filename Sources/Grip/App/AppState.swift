@@ -1590,9 +1590,13 @@ extension AppState {
                                 token: (chartFocus?.token ?? 0) + 1)
     }
 
-    var menuBarTitle: String {
+    /// Text next to the logo in the menu bar: net result of the positions, or the number of waiting orders.
+    var menuBarTitle: String? {
         let positions = account.positions
-        guard !positions.isEmpty else { return T("Grip") }
+        guard !positions.isEmpty else {
+            let n = account.openOrders.count
+            return n == 0 ? nil : (n == 1 ? T("1 order") : T("\(n) orders"))
+        }
         let total = positions.reduce(0) { $0 + net(for: $1) }
         if positions.count == 1, let p = positions.first { return "\(p.coin) \(fmt.signedUsd(total, decimals: 2))" }
         return T("\(positions.count) pos. \(fmt.signedUsd(total, decimals: 2))")

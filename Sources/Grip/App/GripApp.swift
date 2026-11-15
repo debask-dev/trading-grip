@@ -25,7 +25,9 @@ struct GripApp: App {
                 .environmentObject(state)
                 .preferredColorScheme(.dark)
         } label: {
-            Text(state.menuBarTitle)
+            // The Grip "G" as a template image (follows the menu bar colour), plus the result when something is open.
+            Image(nsImage: GripLogo.menuBar)
+            if let title = state.menuBarTitle { Text(title) }
         }
         .menuBarExtraStyle(.window)
 

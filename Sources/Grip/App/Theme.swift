@@ -146,4 +146,28 @@ enum TabColor {
     ]
     static func color(_ i: Int?) -> Color? { i.flatMap { all.indices.contains($0) ? all[$0].color : nil } }
 }
+/// The "G" from the app icon, drawn in code so the menu bar gets a crisp template image.
+enum GripLogo {
+    static let menuBar: NSImage = {
+        let size: CGFloat = 18
+        let img = NSImage(size: NSSize(width: size, height: size), flipped: false) { _ in
+            // App icon geometry (1024 canvas): ring radius 256, stroke 104, opening top-right, bar just below the middle.
+            let s: CGFloat = 15.5 / 616
+            let c = NSPoint(x: size / 2, y: size / 2)
+            let r = 256 * s
+            let path = NSBezierPath()
+            path.appendArc(withCenter: c, radius: r, startAngle: 42, endAngle: 360, clockwise: false)
+            path.line(to: NSPoint(x: c.x + 40 * s, y: c.y))
+            path.lineWidth = 104 * s
+            path.lineCapStyle = .round
+            path.lineJoinStyle = .round
+            NSColor.black.setStroke()
+            path.stroke()
+            return true
+        }
+        img.isTemplate = true
+        img.accessibilityDescription = "Grip"
+        return img
+    }()
+}
 #endif

@@ -683,5 +683,11 @@ In trade. Zet nu je stop en take-profits.	In the trade. Now set your stop and ta
 Direct, zonder vraag. Stop en take-profit zet je daarna in Positie.	Immediately, without asking. Set stop and take-profit afterwards in Position.
 De limit staat als lijn in de chart; sleep om de prijs te kiezen. Stop en take-profit daarna.	The limit is a line in the chart; drag it to choose the price. Stop and take-profit afterwards.
 Voorbeeld met $10.000: koppel je account voor echte bedragen.	Example with $10,000: connect your account for real amounts.
+Posities	Positions
+Open orders	Open orders
+1 order	1 order
+{} orders	{} orders
+Geen positie op {}: deze order staat los open	No position on {}: this order is open on its own
++{} meer, zie ⌘J in Grip	+{} more, see ⌘J in Grip
 """#
 #endif
