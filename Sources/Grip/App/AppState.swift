@@ -1010,7 +1010,8 @@ final class AppState: ObservableObject {
 
     func orderName(_ o: OpenOrder) -> String {
         if o.isTrigger { return o.tpsl == .tp ? T("Take-profit") : T("Stop-loss") }
-        if o.reduceOnly { return T("Close-order") }
+        // Reduce-only limits are take-profits (placed by Grip, or "Verkleinen op prijs").
+        if o.reduceOnly { return T("Take-profit") }
         return T("Limit order")
     }
 

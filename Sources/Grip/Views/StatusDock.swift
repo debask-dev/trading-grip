@@ -9,6 +9,8 @@ struct StatusDock: View {
     @State private var width: CGFloat = 1400
     /// Margin and funding columns only when there is room for them.
     private var wide: Bool { width >= 1180 }
+    /// The stop → TP bar and the result at the stop only when there is room for them.
+    private var medium: Bool { width >= 900 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,8 +30,16 @@ struct StatusDock: View {
                         LazyVStack(spacing: 0) {
                             if state.dockTab == 0 {
                                 if state.account.positions.isEmpty { empty(T("Geen open posities")) }
-                                else { PositionHeader(wide: wide) }
-                                ForEach(state.account.positions) { PositionRow(pos: $0, wide: wide) }
+                                else {
+                                    // Narrow window: fewer columns, and the rest scrolls sideways instead of being cut off.
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        VStack(alignment: .leading, spacing: 0) {
+                                            PositionHeader(wide: wide, medium: medium)
+                                            ForEach(state.account.positions) { PositionRow(pos: $0, wide: wide, medium: medium) }
+                                        }
+                                        .frame(minWidth: width, alignment: .leading)
+                                    }
+                                }
                             } else {
                                 if state.account.openOrders.isEmpty { empty(T("Geen open orders")) }
                                 ForEach(state.ordersByDistance) { OrderRow(order: $0) }
@@ -141,6 +151,7 @@ struct StatusStrip: View {
 struct PositionHeader: View {
     @EnvironmentObject var state: AppState
     let wide: Bool
+    var medium = true
     var body: some View {
         HStack(spacing: 10) {
             title(T("Markt")).frame(width: 130, alignment: .leading)
@@ -160,8 +171,10 @@ struct PositionHeader: View {
                 title(T("Marge")).frame(width: 80, alignment: .trailing)
                 title(T("Funding")).frame(width: 70, alignment: .trailing)
             }
-            title(T("Stop → TP")).frame(width: 170, alignment: .leading)
-            title(T("Bij stop")).frame(width: 70, alignment: .trailing)
+            if medium {
+                title(T("Stop → TP")).frame(width: 170, alignment: .leading)
+                title(T("Bij stop")).frame(width: 70, alignment: .trailing)
+            }
             title(T("Liq.")).frame(width: 80, alignment: .trailing)
             Spacer(minLength: 4)
         }
@@ -178,6 +191,7 @@ struct PositionRow: View {
     @EnvironmentObject var state: AppState
     let pos: Position
     var wide = true
+    var medium = true
     @State private var hovering = false
 
     var body: some View {
@@ -225,6 +239,7 @@ struct PositionRow: View {
                     .frame(width: 70, alignment: .trailing)
                     .help(T("Funding betaald (−) of ontvangen (+) sinds je instapte"))
             }
+            if medium {
             Group {
                 if sl == nil {
                     HStack(spacing: 6) {
@@ -236,6 +251,8 @@ struct PositionRow: View {
                 }
             }
             .frame(width: 170, alignment: .leading)
+            }
+            if medium {
             Group {
                 if let r = m?.low ?? state.resultAtStop(pos), sl != nil {
                     Text(state.fmt.signedUsd(r)).mono(11).foregroundStyle(Theme.pnl(r))
@@ -245,6 +262,7 @@ struct PositionRow: View {
                 }
             }
             .frame(width: 70, alignment: .trailing)
+            }
             two(pos.liquidationPx.map { Fmt.price($0) } ?? "–", liqDist.map { Fmt.percent(-$0, decimals: 1) } ?? "",
                 subColor: (liqDist ?? 1) < 0.05 ? Theme.orange : Theme.dim, color: Theme.dim)
                 .frame(width: 80, alignment: .trailing)

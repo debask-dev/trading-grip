@@ -866,7 +866,7 @@ struct OrdersCard: View {
 
     private func color(_ o: OpenOrder) -> Color {
         if o.isTrigger { return o.tpsl == .tp ? Theme.green : Theme.red }
-        return o.reduceOnly ? Theme.orange : Theme.blue
+        return o.reduceOnly ? Theme.green : Theme.blue
     }
 }
 
