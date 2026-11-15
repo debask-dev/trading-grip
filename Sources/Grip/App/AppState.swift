@@ -115,6 +115,10 @@ extension Array {
 
 enum LineID: Hashable {
     case ticketEntry(Int), ticketSL, ticketTP(Int), ticketLiq, pendingTP(Int), draftTP(Int), order(Int64), position, breakEven, liquidation
+    /// Before the first fill: the trade as planned, on the average of its entries.
+    case plan
+    /// Weighted average of the take-profits.
+    case averageTP
 }
 
 /// A buy/sell marker on the chart.
@@ -161,6 +165,14 @@ struct ChartLine: Identifiable, Equatable {
     var draggable: Bool
     var emphasized: Bool = false
     var closable: Bool = false
+    /// Label drawn as the trade bar (stop … now … all take-profits).
+    var meter: Bool = false
+    /// Label on the left of the chart (so it does not cover the entry labels).
+    var labelLeft: Bool = false
+    /// Hairline with only a tag on the price axis (break-even).
+    var quiet: Bool = false
+    /// While dragged, the line snaps onto break-even.
+    var snapsToBreakEven: Bool = false
 }
 
 @MainActor
@@ -330,6 +342,8 @@ final class AppState: ObservableObject {
     @Published var showMarketPicker = false
     @Published var dockExpanded: Bool = UserDefaults.standard.bool(forKey: "dockExpanded") { didSet { defaults.set(dockExpanded, forKey: "dockExpanded") } }
     @Published var dockTab: Int = 0
+    /// Position list: % under the result as ROE (of the margin, like the exchanges) instead of % of the account + R.
+    @Published var pnlShowsROE: Bool = UserDefaults.standard.bool(forKey: "pnlShowsROE") { didSet { defaults.set(pnlShowsROE, forKey: "pnlShowsROE") } }
     @Published var dockHeight: Double = UserDefaults.standard.object(forKey: "dockHeight") as? Double ?? 220 { didSet { defaults.set(dockHeight, forKey: "dockHeight") } }
 
     /// Margin budget: room for this many positions at once (1 = off).
@@ -1014,6 +1028,11 @@ final class AppState: ObservableObject {
                 lines.append(ChartLine(id: .draftTP(i), price: l.price, color: Palette.green, dashed: true, draggable: true, closable: true))
             }
         }
+        let cm = chartMeter
+        // Weighted average take-profit: carries what the whole trade brings (only with more than one TP).
+        if draft == nil, let cm, let avg = cm.meter.averageTP, currentTPs.count > 1 {
+            lines.append(ChartLine(id: .averageTP, price: avg, color: Palette.accent.withAlphaComponent(0.85), dashed: true, draggable: false))
+        }
         // Take-profits that wait for the entry to fill.
         if draft == nil, let pend = managed[coin]?.tps {
             for (i, px) in pend.prices.enumerated() {
@@ -1025,15 +1044,42 @@ final class AppState: ObservableObject {
         for o in coinOrders where !(hideStop && o.isTrigger && o.tpsl == .sl) {
             if draft != nil && o.reduceOnly && (!o.isTrigger || o.tpsl == .tp) { continue }
             let px = orderEdit?.oid == o.oid ? orderEdit!.price : (pendingOrderPrices[o.oid] ?? o.displayPx)
-            let color: NSColor = o.isTrigger ? (o.tpsl == .tp ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.orange : Palette.blue)
-            lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: !o.isTrigger, draggable: true, closable: true))
+            let isStop = o.isTrigger && o.tpsl == .sl
+            // A stop that leaves a profit is green: this trade cannot lose any more.
+            let stopSafe = isStop && (cm?.meter.low ?? -1) >= 0
+            let color: NSColor = o.isTrigger ? (o.tpsl == .tp || stopSafe ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.green : Palette.blue)
+            lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: true, draggable: true, closable: true, snapsToBreakEven: isStop))
         }
         if let pos = position {
-            lines.append(ChartLine(id: .position, price: pos.entryPx, color: pos.isLong ? Palette.blue : Palette.accent, dashed: false, draggable: false, emphasized: true, closable: true))
-            if let be = breakEven { lines.append(ChartLine(id: .breakEven, price: be, color: Palette.muted, dashed: true, draggable: false)) }
+            // Position line and bar coloured by the result of the whole trade.
+            let net = cm?.meter.now ?? positionNet ?? 0
+            lines.append(ChartLine(id: .position, price: pos.entryPx, color: net >= 0 ? Palette.green : Palette.red, dashed: false, draggable: false,
+                                   emphasized: true, closable: true, meter: true))
+            // Break-even: only when it is clearly away from the entry (right after entering it is just the fees).
+            if let be = breakEven, abs(be - pos.entryPx) / max(pos.entryPx, 1e-12) > 0.0015 {
+                lines.append(ChartLine(id: .breakEven, price: be, color: Palette.muted, dashed: true, draggable: false, quiet: true))
+            }
             if let liq = pos.liquidationPx, liq > 0 { lines.append(ChartLine(id: .liquidation, price: liq, color: Palette.red.withAlphaComponent(0.8), dashed: true, draggable: false)) }
         }
+        if position == nil, ticket == nil, let cm, cm.restingEntries > 0 {
+            lines.append(ChartLine(id: .plan, price: cm.meter.plannedEntry, color: Palette.muted, dashed: true, draggable: false,
+                                   meter: true, labelLeft: true))
+        }
         return lines
+    }
+
+    /// Take-profit orders of the current coin, nearest to the entry first.
+    private var orderedTPs: [OpenOrder] {
+        guard let side = tradeSide else { return [] }
+        return TPEditor.takeProfitOrders(coinOrders, isLong: side).sorted { side ? $0.displayPx < $1.displayPx : $0.displayPx > $1.displayPx }
+    }
+
+    /// Label of a take-profit (order or waiting ladder): its share, or for a single TP what the whole trade brings.
+    private func tpLabel(index i: Int, count n: Int, fraction: Double, price px: Double) -> String {
+        if n == 1 && fraction >= 0.995, let cm = meter(for: coin, takeProfits: [TPTarget(price: px, fraction: 1)]), let hi = cm.meter.high {
+            return "TP · " + fmt.signedUsd(hi) + (rText(cm.meter, hi).map { " · " + $0 } ?? "")
+        }
+        return "TP\(n > 1 ? "\(i + 1)" : "") " + shareText(fraction)
     }
 
     /// Live label for a chart line at a (possibly dragged) price.
@@ -1065,8 +1111,11 @@ final class AppState: ObservableObject {
             return T("LIQ ≈ \(Fmt.price(px))")
         case .pendingTP(let i):
             let n = managed[coin]?.tps?.prices.count ?? 1
-            let pct = Int(((managed[coin]?.tps?.fractions[safe: i] ?? 1) * 100).rounded())
-            return T("TP\(n > 1 ? "\(i + 1)" : "") · \(pct)%  wacht op entry")
+            return tpLabel(index: i, count: n, fraction: managed[coin]?.tps?.fractions[safe: i] ?? 1, price: px)
+        case .plan:
+            return chartMeter.map { meterLabel($0, plan: true) } ?? ""
+        case .averageTP:
+            return chartMeter.map { averageTPLabel($0) } ?? "Ø TP"
         case .draftTP(let i):
             guard let d = tpDraft, d.levels.indices.contains(i) else { return "" }
             var l = d.levels[i]
@@ -1074,6 +1123,26 @@ final class AppState: ObservableObject {
             return T("TP\(i + 1) · \(Int(l.pct))%  \(f.signedUsd(draftProfit(l, isLong: d.isLong)))  · nieuw")
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
+            // Stop: what the whole trade ends with there (waiting entries filled on the way).
+            if o.isTrigger && o.tpsl == .sl, let cm = meter(for: coin, stop: px), let low = cm.meter.low {
+                if let be = breakEven, abs(px - be) < priceTick / 2 { return T("SL op BE") }
+                return "SL " + f.signedUsd(low)
+            }
+            // Take-profits: the share they close.
+            let tps = orderedTPs
+            if let i = tps.firstIndex(where: { $0.oid == oid }) {
+                let base = TPEditor.baseSize(isLong: tradeSide ?? true, position: position, orders: coinOrders)
+                return tpLabel(index: i, count: tps.count, fraction: base > 0 && o.size > 0 ? min(o.size / base, 1) : 1, price: px)
+            }
+            // Entries of a ladder: number and share.
+            if !o.isTrigger && !o.reduceOnly, let side = tradeSide, o.isBuy == side {
+                let entries = TPEditor.restingEntries(coinOrders, isLong: side).sorted { side ? $0.limitPx > $1.limitPx : $0.limitPx < $1.limitPx }
+                if entries.count > 1, let i = entries.firstIndex(where: { $0.oid == oid }) {
+                    let total = entries.reduce(0) { $0 + $1.size } + abs(position?.size ?? 0)
+                    let filled = max((managed[coin]?.entryCount ?? entries.count) - entries.count, 0)
+                    return "E\(filled + i + 1) " + shareText(o.size / max(total, 1e-12))
+                }
+            }
             if let pos = position, o.isTrigger && o.tpsl == .sl {
                 // Stop: what the whole trade ends with if it is hit (realized parts, fees and funding included).
                 let net = tradeResult(pos, at: px)
@@ -1094,6 +1163,7 @@ final class AppState: ObservableObject {
             return T("LIMIT \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))")
         case .position:
             guard let pos = position else { return "" }
+            if let cm = chartMeter { return meterLabel(cm, plan: false) }
             let net = positionNet ?? 0
             let label = T("\(pos.isLong ? "LONG" : "SHORT") \(f.size(pos.size, coin: coin, decimals: szDecimals))  ·  gem. \(Fmt.price(pos.entryPx))  ·  netto \(f.signedUsd(net, decimals: 2))  (\(Fmt.percent(net / eq, decimals: 2)))")
             // Take-profits that close only part: say how much runs until the stop.
@@ -1101,7 +1171,7 @@ final class AppState: ObservableObject {
             guard cover > 0.005 && cover < 0.995 else { return label }
             return label + "  ·  " + T("\(Int(((1 - cover) * 100).rounded()))% zonder TP")
         case .breakEven:
-            return T("BE \(Fmt.price(px))  ·  break-even na fees\((openTrade?.funding ?? 0) != 0 ? " + funding" : "")")
+            return "BE"
         case .liquidation:
             return T("LIQ \(Fmt.price(px))")
         }
@@ -1120,7 +1190,7 @@ final class AppState: ObservableObject {
         case .ticketEntry(let i): if ticket?.entries.indices.contains(i) == true { ticket?.entries[i].price = px }
         case .ticketSL: ticket?.stopLoss = px
         case .ticketTP(let i): if ticket?.tps.indices.contains(i) == true { ticket?.tps[i].price = px }
-        case .ticketLiq, .pendingTP: break
+        case .ticketLiq, .pendingTP, .plan, .averageTP: break
         case .draftTP(let i): setDraftPrice(i, px)
         case .order(let oid) where orderEdit?.oid == oid:
             orderEdit?.price = px

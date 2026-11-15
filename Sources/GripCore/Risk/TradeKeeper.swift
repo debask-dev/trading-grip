@@ -22,6 +22,10 @@ public struct ManagedTrade: Codable, Equatable, Sendable {
     /// Take-profit ladder to place at the first fill.
     public var tps: PendingTPs?
     public var failures: Int = 0
+    /// Risk of the whole trade as placed (positive): 1R in the chart and the position list.
+    public var plannedRisk: Double?
+    /// How many entries the trade was placed with (for ●○○ in the chart).
+    public var entryCount: Int?
 
     public init(isLong: Bool, stop: Double? = nil, entryOids: [Int64] = [], lastSize: Double, tps: PendingTPs? = nil) {
         self.isLong = isLong; self.stop = stop; self.entryOids = entryOids; self.lastSize = lastSize; self.tps = tps

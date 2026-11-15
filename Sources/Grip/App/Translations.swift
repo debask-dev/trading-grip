@@ -638,5 +638,26 @@ Marge die deze positie vastzet	Margin this position ties up
  · {}% van vak	 · {}% of slot
 Marge die deze positie vastzet (positiewaarde ÷ hefboom{}). Het percentage is van je portfolio{}.	Margin this position ties up (position value ÷ leverage{}). The percentage is of your portfolio{}.
 ; een vak is {} (1/{} van je account)	; a slot is {} (1/{} of your account)
+risico {}	risk {}
+Ø TP · nu {} · alles {}{}	Ø TP · now {} · all {}{}
+Ø TP · alles {}{}	Ø TP · all {}{}
+SL op BE	SL at BE
+⚠ geen stop	⚠ no stop
+vanaf koers	from price
+Markt	Market
+Entry → koers	Entry → price
+Netto	Net
+ROE ⇄	ROE ⇄
+% · R ⇄	% · R ⇄
+Toont ROE: resultaat ÷ marge, zoals op de beurs. Klik voor % van je account en R.	Shows ROE: result ÷ margin, like the exchange. Click for % of your account and R.
+Toont % van je account en R (resultaat ÷ je risico bij de stop). Klik voor ROE, zoals op de beurs.	Shows % of your account and R (result ÷ your risk at the stop). Click for ROE, like the exchange.
+Stop → TP	Stop → TP
+Bij stop	At stop
+Liq.	Liq.
+{}× {}	{}× {}
+Netto na fees en funding. Al binnen {} · betaalde fees {} · funding {}	Net after fees and funding. Already taken {} · fees paid {} · funding {}
+{}% van vak	{}% of slot
+Funding betaald (−) of ontvangen (+) sinds je instapte	Funding paid (−) or received (+) since you entered
+Liquidatieprijs en hoe ver de koers daarvan af is	Liquidation price and how far the price is from it
 """#
 #endif

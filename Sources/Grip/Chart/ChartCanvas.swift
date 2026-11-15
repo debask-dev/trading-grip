@@ -27,6 +27,12 @@ final class ChartCanvas: NSView {
     /// Changes when line labels would read differently (amounts hidden, ticket, position).
     var labelKey = ""
     var lines: [ChartLine] = []
+    /// The whole trade, for the bar in the position label and the risk/reward bracket.
+    var meter: ChartMeter?
+    /// Break-even price (also when its line is hidden): the stop snaps onto it.
+    var breakEvenPrice: Double?
+    /// Short words for the bar ("⚠ geen stop", "vanaf koers"), translated by the app.
+    var words = ChartWords()
     var trendlines: [Trendline] = []
     var selectedTrendline: UUID?
     var tool: ChartTool = .cursor { didSet { if tool != .trendline { pendingTrendStart = nil; trendDraft = nil } } }
@@ -693,7 +699,21 @@ final class ChartCanvas: NSView {
     }
 
     private func drawOrderLines() {
-        for line in lines {
+        drawRiskBracket()
+        var placed: [NSRect] = []
+        // Labels that would overlap one placed before move to the left of it.
+        func free(_ r: NSRect) -> NSRect {
+            var r = r
+            for _ in 0..<6 {
+                guard let hit = placed.first(where: { $0.insetBy(dx: -3, dy: -1).intersects(r) }) else { break }
+                r.origin.x = hit.minX - r.width - 6
+            }
+            placed.append(r)
+            return r
+        }
+        // The position bar first: it is the widest and the one to keep in place.
+        let ordered = lines.filter { $0.meter } + lines.filter { !$0.meter }
+        for line in ordered {
             let isDragging = isDraggingLine(line.id)
             let px = isDragging ? (dragPrice ?? line.price) : line.price
             let rawY = y(px)
@@ -701,9 +721,21 @@ final class ChartCanvas: NSView {
             let yy = align(min(max(rawY, plot.minY + 12), plot.maxY - 12)) + 0.5 / pixelRatio
             let hot = isDragging || hover == .line(line.id)
 
+            if line.quiet {
+                // Break-even: a hairline and a grey tag on the price axis, nothing in the chart.
+                guard !offscreen else { continue }
+                line.color.withAlphaComponent(0.7).setStroke()
+                hline(yy, from: plot.minX, to: plot.maxX, width: 1, dash: [2, 3])
+                let r = NSRect(x: plot.maxX + 3, y: yy - 10, width: axisWidth - 7, height: 20)
+                Palette.card.setFill(); NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
+                text((labelFor?(line.id, px) ?? "BE") + " " + Fmt.price(px), at: CGPoint(x: r.minX + 6, y: yy),
+                     font: .monospacedDigitSystemFont(ofSize: 10, weight: .semibold), color: Palette.muted, align: .left)
+                continue
+            }
+
             if !offscreen {
                 line.color.setStroke()
-                hline(yy, from: plot.minX, to: plot.maxX, width: line.emphasized ? 2 : (hot ? 2 : 1.4), dash: line.dashed ? [6, 4] : nil)
+                hline(yy, from: plot.minX, to: plot.maxX, width: line.emphasized ? 2 : (hot ? 2 : 1.4), dash: line.dashed ? (line.meter ? [2, 3] : [6, 4]) : nil)
                 axisTag(px, at: yy, bg: line.color, fg: Palette.bg)
             }
 
@@ -713,21 +745,37 @@ final class ChartCanvas: NSView {
             let size = (label as NSString).size(withAttributes: [.font: font])
             let gripW: CGFloat = line.draggable ? 14 : 0
             let closeW: CGFloat = line.closable ? 20 : 0
-            let w = size.width + 20 + gripW + closeW
-            let rect = NSRect(x: plot.maxX - 14 - w, y: yy - 11.5, width: w, height: 23)
+            let barred = line.meter && meterDrawable
+            var w = size.width + 20 + gripW + closeW
+            if barred { w = max(w + meterRightTextWidth(font) + 14, 236) }
+            let x0 = line.labelLeft ? plot.minX + 22 : plot.maxX - 14 - w
+            let rect = free(NSRect(x: x0, y: yy - 11.5, width: w, height: 23))
             let path = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-            if line.emphasized || hot {
+            var fg = (line.emphasized || hot) ? Palette.bg : line.color
+            if barred {
+                drawMeterBar(in: rect, path: path, line: line, font: font)
+                fg = Palette.text
+            } else if line.emphasized || hot {
                 line.color.setFill(); path.fill()
             } else {
                 Palette.panel.withAlphaComponent(0.95).setFill(); path.fill()
                 line.color.setStroke(); path.lineWidth = 1.2; path.stroke()
             }
-            let fg = (line.emphasized || hot) ? Palette.bg : line.color
             if line.draggable {
                 fg.setFill()
                 for k in 0..<3 { NSRect(x: rect.minX + 9, y: yy - 4 + CGFloat(k) * 3.5, width: 8, height: 1.4).fill() }
             }
-            text(label, at: CGPoint(x: rect.minX + 10 + gripW, y: yy), font: font, color: fg, align: .left)
+            if barred {
+                let shadow = NSShadow(); shadow.shadowColor = NSColor.black.withAlphaComponent(0.7); shadow.shadowBlurRadius = 2.5; shadow.shadowOffset = .zero
+                NSGraphicsContext.saveGraphicsState(); shadow.set()
+                text(label, at: CGPoint(x: rect.minX + 10 + gripW, y: yy), font: font, color: Palette.text, align: .left)
+                if let rt = meterRightText {
+                    text(rt.text, at: CGPoint(x: rect.maxX - 8 - closeW, y: yy), font: .monospacedDigitSystemFont(ofSize: 11, weight: .bold), color: rt.color, align: .right)
+                }
+                NSGraphicsContext.restoreGraphicsState()
+            } else {
+                text(label, at: CGPoint(x: rect.minX + 10 + gripW, y: yy), font: font, color: fg, align: .left)
+            }
             if line.draggable { labelRects[line.id] = rect }
             if line.closable {
                 let cr = NSRect(x: rect.maxX - 21, y: yy - 9, width: 18, height: 18)
@@ -743,8 +791,8 @@ final class ChartCanvas: NSView {
                 lineCloseRects[line.id] = cr
                 if !line.draggable { labelRects[line.id] = rect }
             }
-
         }
+        drawDistanceArrow()
 
         // Ghost line while dragging the close handle
         if let g = closeGhost {
@@ -895,7 +943,7 @@ final class ChartCanvas: NSView {
     /// Tinted area between the average entry and the current price (green in profit, red in loss).
     private func drawPositionZone() {
         guard let pos = lines.first(where: { $0.id == .position }), lastPrice > 0 else { return }
-        let isLong = pos.color != Palette.accent
+        let isLong = meter?.isLong ?? true
         let inProfit = isLong ? lastPrice >= pos.price : lastPrice <= pos.price
         (inProfit ? Palette.green : Palette.red).withAlphaComponent(0.07).setFill()
         let y0 = y(pos.price), y1 = y(lastPrice)
@@ -1240,8 +1288,11 @@ final class ChartCanvas: NSView {
         case .timeAxis(let sx, let ss):
             vp.scaleTimeAxis(startSpacing: ss, startX: Double(sx - plot.minX), x: Double(p.x - plot.minX))
         case .line(let id):
-            dragPrice = price(y: p.y)
-            onLineDrag?(id, dragPrice!, false)
+            var px = price(y: p.y)
+            // The stop clicks onto break-even when it comes close.
+            if lines.first(where: { $0.id == id })?.snapsToBreakEven == true, let be = breakEvenPrice, abs(y(be) - p.y) < 7 { px = be }
+            dragPrice = px
+            onLineDrag?(id, px, false)
         case .close:
             closeGhost = price(y: p.y)
         case .trendNew:
@@ -1477,6 +1528,170 @@ final class ChartCanvas: NSView {
 }
 
 /// NSMenuItem that runs a closure.
+// MARK: - Trade bar, risk bracket, distance arrow
+
+extension ChartCanvas {
+    /// The bar needs a stop or a take-profit to have two ends.
+    fileprivate var meterDrawable: Bool {
+        guard let m = meter?.meter else { return false }
+        return m.oneR != nil || m.high != nil
+    }
+
+    /// Left end (stop or liquidation), right end (all take-profits, or the next whole R without take-profits).
+    fileprivate func meterScale() -> (lo: Double, hi: Double, endR: Int?) {
+        guard let m = meter?.meter else { return (0, 1, nil) }
+        var endR: Int? = nil
+        var hi: Double
+        if let h = m.high { hi = h }
+        else if let one = m.oneR, one > 0 {
+            let r = max(2, Int(floor(max(m.now / one, 0))) + 1)
+            endR = r
+            hi = Double(r) * one
+        } else { hi = max(m.now, 1) }
+        let lo = min(m.low ?? min(m.now, 0), 0, m.now)
+        hi = max(hi, m.now, lo + 1e-6)
+        return (lo, hi, endR)
+    }
+
+    fileprivate var meterRightText: (text: String, color: NSColor)? {
+        guard let m = meter?.meter else { return nil }
+        if m.oneR == nil { return (words.noStop, Palette.orange) }
+        if m.high == nil, let r = meterScale().endR { return ("\(r)R →", Palette.text) }
+        return nil
+    }
+
+    fileprivate func meterRightTextWidth(_ font: NSFont) -> CGFloat {
+        guard let t = meterRightText?.text else { return 0 }
+        return (t as NSString).size(withAttributes: [.font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .bold)]).width
+    }
+
+    /// The position label as a bar: red up to zero (what the stop costs), green from zero to all take-profits,
+    /// filled up to where the trade is now. Triangles mark where each take-profit brings the whole trade.
+    fileprivate func drawMeterBar(in r: NSRect, path: NSBezierPath, line: ChartLine, font: NSFont) {
+        guard let cm = meter else { return }
+        let m = cm.meter
+        let plan = line.id == .plan
+        let sc = meterScale()
+        let X = { (v: Double) -> CGFloat in r.minX + r.width * CGFloat(min(max((v - sc.lo) / max(sc.hi - sc.lo, 1e-9), 0), 1)) }
+        let zx = X(0)
+        NSGraphicsContext.saveGraphicsState()
+        path.addClip()
+        Palette.panel.setFill(); r.fill()
+        if sc.lo < 0 {
+            Palette.red.withAlphaComponent(0.2).setFill()
+            NSRect(x: r.minX, y: r.minY, width: zx - r.minX, height: r.height).fill()
+        }
+        let reach = m.high == nil ? sc.hi : (m.highNow ?? sc.hi)
+        Palette.green.withAlphaComponent(0.14).setFill()
+        NSRect(x: zx, y: r.minY, width: max(X(reach) - zx, 0), height: r.height).fill()
+        // Comes with the entries that still wait: striped.
+        if cm.restingEntries > 0, let hi = m.high {
+            let sx = X(max(m.highNow ?? 0, 0)), ex = X(hi)
+            if ex > sx + 1 {
+                NSGraphicsContext.saveGraphicsState()
+                NSRect(x: sx, y: r.minY, width: ex - sx, height: r.height).clip()
+                Palette.green.withAlphaComponent(0.4).setStroke()
+                var k = sx - r.height
+                while k < ex {
+                    let p = NSBezierPath(); p.move(to: CGPoint(x: k, y: r.maxY)); p.line(to: CGPoint(x: k + r.height, y: r.minY))
+                    p.lineWidth = 2; p.stroke(); k += 6
+                }
+                NSGraphicsContext.restoreGraphicsState()
+            }
+        }
+        // Take-profits close less than everything: the right end runs out.
+        if m.openEnded, let g = NSGradient(starting: Palette.green.withAlphaComponent(0), ending: Palette.green.withAlphaComponent(0.45)) {
+            g.draw(in: NSRect(x: r.maxX - r.width * 0.12, y: r.minY, width: r.width * 0.12, height: r.height), angle: 0)
+        }
+        // Already sure (after a take-profit with the stop beyond break-even): from zero to the stop result.
+        if let low = m.low, low > 0 {
+            Palette.green.withAlphaComponent(0.35).setFill()
+            NSRect(x: zx, y: r.minY, width: X(low) - zx, height: r.height).fill()
+        }
+        if !plan {
+            if m.now >= 0 {
+                Palette.green.withAlphaComponent(0.85).setFill()
+                NSRect(x: zx, y: r.minY, width: X(m.now) - zx, height: r.height).fill()
+            } else {
+                Palette.red.withAlphaComponent(0.85).setFill()
+                NSRect(x: X(m.now), y: r.minY, width: zx - X(m.now), height: r.height).fill()
+            }
+        }
+        if sc.lo < 0 {
+            Palette.text.withAlphaComponent(0.8).setFill()
+            NSRect(x: zx - 0.7, y: r.minY, width: 1.4, height: r.height).fill()
+        }
+        Palette.text.withAlphaComponent(0.9).setFill()
+        for v in m.marks {
+            let mx = X(v)
+            guard mx < r.maxX - 4 else { continue }
+            let t = NSBezierPath()
+            t.move(to: CGPoint(x: mx - 3.5, y: r.minY)); t.line(to: CGPoint(x: mx + 3.5, y: r.minY)); t.line(to: CGPoint(x: mx, y: r.minY + 4.5)); t.close()
+            t.move(to: CGPoint(x: mx - 3.5, y: r.maxY)); t.line(to: CGPoint(x: mx + 3.5, y: r.maxY)); t.line(to: CGPoint(x: mx, y: r.maxY - 4.5)); t.close()
+            t.fill()
+        }
+        // Without take-profits: a tick per R.
+        if m.high == nil, let one = m.oneR, let endR = sc.endR, endR > 1 {
+            Palette.text.withAlphaComponent(0.6).setFill()
+            for k in 1..<endR { NSRect(x: X(Double(k) * one) - 0.6, y: r.maxY - 4, width: 1.2, height: 4).fill() }
+        }
+        NSGraphicsContext.restoreGraphicsState()
+        let border: NSColor = plan ? Palette.muted : (m.oneR == nil ? Palette.orange : (m.now >= 0 ? Palette.green : Palette.red))
+        border.setStroke()
+        path.lineWidth = 1.3
+        if plan { path.setLineDash([4, 3], count: 2, phase: 0) }
+        path.stroke()
+    }
+
+    /// Left edge of the chart: risk (entry to stop, red) against reward (entry to the average take-profit, green).
+    fileprivate func drawRiskBracket() {
+        guard let cm = meter, let stop = cm.stop, let avg = cm.meter.averageTP, let hi = cm.meter.high,
+              let one = cm.meter.oneR, one > 0 else { return }
+        let e = cm.meter.plannedEntry
+        let dir: Double = cm.isLong ? 1 : -1
+        guard dir * (e - stop) > 0, dir * (avg - e) > 0 else { return }
+        let x = plot.minX + 7
+        func bar(_ a: Double, _ b: Double, _ c: NSColor) {
+            let p = NSBezierPath()
+            p.move(to: CGPoint(x: x, y: y(a))); p.line(to: CGPoint(x: x, y: y(b)))
+            p.lineWidth = 4; p.lineCapStyle = .round
+            c.withAlphaComponent(0.85).setStroke(); p.stroke()
+        }
+        bar(e, stop, Palette.red)
+        bar(avg, e, Palette.green)
+        let f = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .bold)
+        text("1", at: CGPoint(x: x + 7, y: (y(e) + y(stop)) / 2), font: f, color: Palette.red, align: .left)
+        text(Fmt.number(hi / one, decimals: 1), at: CGPoint(x: x + 7, y: (y(avg) + y(e)) / 2), font: f, color: Palette.green, align: .left)
+    }
+
+    /// Hovering a line: an arrow from the current price to it, with the distance in %.
+    fileprivate func drawDistanceArrow() {
+        guard case .line(let id)? = hover, case .none = drag, lastPrice > 0,
+              let line = lines.first(where: { $0.id == id }) else { return }
+        let y0 = y(lastPrice), y1 = y(line.price)
+        guard abs(y1 - y0) > 16 else { return }
+        let x = max(plot.minX + 60, plot.maxX - 330)
+        let down = y1 > y0
+        Palette.text.withAlphaComponent(0.85).setStroke()
+        let p = NSBezierPath()
+        p.move(to: CGPoint(x: x, y: y0)); p.line(to: CGPoint(x: x, y: y1 + (down ? -6 : 6)))
+        p.lineWidth = 1.3; p.stroke()
+        Palette.text.withAlphaComponent(0.85).setFill()
+        let h = NSBezierPath()
+        h.move(to: CGPoint(x: x - 4, y: y1 + (down ? -7 : 7))); h.line(to: CGPoint(x: x, y: y1)); h.line(to: CGPoint(x: x + 4, y: y1 + (down ? -7 : 7))); h.close()
+        h.fill()
+        let pct = (line.price - lastPrice) / lastPrice * 100
+        let s = (pct >= 0 ? "↑ " : "↓ ") + Fmt.number(abs(pct), decimals: abs(pct) < 1 ? 2 : 1) + "% " + words.fromPrice
+        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let w = (s as NSString).size(withAttributes: [.font: font]).width + 14
+        let r = NSRect(x: x - w - 6, y: (y0 + y1) / 2 - 10, width: w, height: 20)
+        Palette.panel.withAlphaComponent(0.95).setFill()
+        let box = NSBezierPath(roundedRect: r, xRadius: 5, yRadius: 5); box.fill()
+        Palette.text.withAlphaComponent(0.4).setStroke(); box.lineWidth = 1; box.stroke()
+        text(s, at: CGPoint(x: r.minX + 7, y: r.midY), font: font, color: Palette.text, align: .left)
+    }
+}
+
 final class ClosureMenuItem: NSMenuItem {
     private let handler: @MainActor () -> Void
     init(title: String, handler: @escaping @MainActor () -> Void) {

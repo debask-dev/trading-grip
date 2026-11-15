@@ -458,6 +458,9 @@ extension AppState {
             m.lastSize = abs(pos?.size ?? 0)
             if let stop { m.stop = stop }
             for st in statuses.prefix(entryCount) { if case .resting(let oid) = st { m.entryOids.append(oid); orderKinds[oid] = .limit } }
+            // 1R for the chart and the position list: the risk of the whole trade (also after adding).
+            if let r = pl.riskUsd, r > 0 { m.plannedRisk = r }
+            m.entryCount = pos == nil ? entryCount : (m.entryCount ?? 1) + entryCount
             if !ladder.isEmpty && !(simple && attachTP) {
                 // Under 100% together: only that part gets a take-profit, the rest runs until the stop.
                 let total = max(ladder.reduce(0) { $0 + $1.pct }, 100)

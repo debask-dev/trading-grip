@@ -36,7 +36,7 @@ extension AppState {
         switch id {
         case .ticketEntry(let i): removeTicketEntry(i)
         case .ticketSL: if ticket?.riskSized == false { setUseStop(false) }
-        case .ticketLiq, .pendingTP: break
+        case .ticketLiq, .pendingTP, .plan, .averageTP: break
         case .draftTP(let i): removeDraftTP(i)
         case .ticketTP(let i): removeTicketTP(i)
         case .order(let oid):

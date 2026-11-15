@@ -6,6 +6,9 @@ import GripCore
 struct StatusDock: View {
     @EnvironmentObject var state: AppState
     @State private var dragStart: Double?
+    @State private var width: CGFloat = 1400
+    /// Margin and funding columns only when there is room for them.
+    private var wide: Bool { width >= 1180 }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,7 +28,8 @@ struct StatusDock: View {
                         LazyVStack(spacing: 0) {
                             if state.dockTab == 0 {
                                 if state.account.positions.isEmpty { empty(T("Geen open posities")) }
-                                ForEach(state.account.positions) { PositionRow(pos: $0) }
+                                else { PositionHeader(wide: wide) }
+                                ForEach(state.account.positions) { PositionRow(pos: $0, wide: wide) }
                             } else {
                                 if state.account.openOrders.isEmpty { empty(T("Geen open orders")) }
                                 ForEach(state.ordersByDistance) { OrderRow(order: $0) }
@@ -35,6 +39,7 @@ struct StatusDock: View {
                 }
                 .frame(height: CGFloat(state.dockHeight))
                 .background(Theme.panel)
+                .background(GeometryReader { g in Color.clear.onAppear { width = g.size.width }.onChange(of: g.size.width) { _, w in width = w } })
             }
         }
         .overlay(alignment: .top) {
@@ -132,9 +137,47 @@ struct StatusStrip: View {
 
 // MARK: - Rows
 
+/// Column titles above the positions. The result column switches between % of the account + R and ROE.
+struct PositionHeader: View {
+    @EnvironmentObject var state: AppState
+    let wide: Bool
+    var body: some View {
+        HStack(spacing: 10) {
+            title(T("Markt")).frame(width: 130, alignment: .leading)
+            title(T("Grootte")).frame(width: 90, alignment: .trailing)
+            title(T("Entry → koers")).frame(width: 150, alignment: .trailing)
+            Button { state.pnlShowsROE.toggle() } label: {
+                HStack(spacing: 3) {
+                    title(T("Netto"))
+                    Text(state.pnlShowsROE ? T("ROE ⇄") : T("% · R ⇄")).font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.accent)
+                }
+            }
+            .buttonStyle(.plain)
+            .frame(width: 110, alignment: .trailing)
+            .help(state.pnlShowsROE ? T("Toont ROE: resultaat ÷ marge, zoals op de beurs. Klik voor % van je account en R.")
+                                    : T("Toont % van je account en R (resultaat ÷ je risico bij de stop). Klik voor ROE, zoals op de beurs."))
+            if wide {
+                title(T("Marge")).frame(width: 80, alignment: .trailing)
+                title(T("Funding")).frame(width: 70, alignment: .trailing)
+            }
+            title(T("Stop → TP")).frame(width: 170, alignment: .leading)
+            title(T("Bij stop")).frame(width: 70, alignment: .trailing)
+            title(T("Liq.")).frame(width: 80, alignment: .trailing)
+            Spacer(minLength: 4)
+        }
+        .padding(.horizontal, 12).padding(.vertical, 4)
+        .overlay(alignment: .bottom) { Divider().overlay(Theme.line) }
+    }
+
+    private func title(_ s: String) -> some View {
+        Text(s.uppercased()).font(.system(size: 9.5, weight: .semibold)).tracking(0.5).foregroundStyle(Theme.dim)
+    }
+}
+
 struct PositionRow: View {
     @EnvironmentObject var state: AppState
     let pos: Position
+    var wide = true
     @State private var hovering = false
 
     var body: some View {
@@ -143,16 +186,45 @@ struct PositionRow: View {
         let sl = state.stopOrder(pos.coin)
         let tp = state.takeProfits(pos.coin).map(\.displayPx).sorted(by: { pos.isLong ? $0 > $1 : $0 < $1 }).first
         let be = state.breakEven(for: pos)
+        let eq = max(state.account.accountValue, 1)
+        let m = state.meter(for: pos.coin)?.meter
+        let ot = state.analysis.open[pos.coin]
+        let move = (px - pos.entryPx) / max(pos.entryPx, 1e-12)
+        let liqDist = pos.liquidationPx.map { abs(px - $0) / max(px, 1e-12) }
         HStack(spacing: 10) {
             HStack(spacing: 6) {
                 SidePill(isLong: pos.isLong)
                 Text(pos.coin).fontWeight(.semibold)
-                Text(T("\(pos.leverage)×")).foregroundStyle(Theme.dim)
+                Text(T("\(pos.leverage)× \(pos.isCross ? "cross" : "iso")")).foregroundStyle(Theme.dim)
             }
             .frame(width: 130, alignment: .leading)
-            Text(state.fmt.size(pos.size, coin: "", decimals: 4)).mono(11.5).frame(width: 80, alignment: .trailing)
-            Text("\(Fmt.price(pos.entryPx)) → \(Fmt.price(px))").mono(11.5).frame(width: 150, alignment: .trailing)
-            Text(state.fmt.signedUsd(net, decimals: 2)).mono(11.5, .semibold).foregroundStyle(Theme.pnl(net)).frame(width: 90, alignment: .trailing)
+            two(state.fmt.size(pos.size, coin: "", decimals: 4), state.fmt.usd(abs(pos.size) * px))
+                .frame(width: 90, alignment: .trailing)
+            two("\(Fmt.price(pos.entryPx)) → \(Fmt.price(px))", Fmt.percent(move, decimals: 2))
+                .frame(width: 150, alignment: .trailing)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(state.fmt.signedUsd(net, decimals: 2)).mono(11.5, .semibold).foregroundStyle(Theme.pnl(net))
+                Text(pnlDetail(net: net, eq: eq, meter: m)).mono(10).foregroundStyle(Theme.pnl(net).opacity(0.8))
+            }
+            .frame(width: 110, alignment: .trailing)
+            .help(T("Netto na fees en funding. Al binnen \(state.fmt.signedUsd(ot?.realized ?? 0, decimals: 2)) · betaalde fees \(state.fmt.usd(ot?.feesPaid ?? 0, decimals: 2)) · funding \(state.fmt.signedUsd(ot?.funding ?? 0, decimals: 2))"))
+            if wide {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(state.fmt.usd(pos.marginUsed, decimals: pos.marginUsed < 100 ? 2 : 0)).mono(11.5)
+                    if state.budgetActive {
+                        let slot = pos.marginUsed / max(state.slotMargin, 1e-9)
+                        Text(T("\(Int((slot * 100).rounded()))% van vak")).mono(10).foregroundStyle(slot > 1 ? Theme.orange : Theme.dim)
+                    } else {
+                        Text(Fmt.percent(pos.marginUsed / eq, decimals: 1, signed: false)).mono(10).foregroundStyle(Theme.dim)
+                    }
+                }
+                .frame(width: 80, alignment: .trailing)
+                .help(T("Marge die deze positie vastzet"))
+                let funding = ot?.funding ?? 0
+                Text(state.fmt.signedUsd(funding, decimals: 2)).mono(11.5).foregroundStyle(funding == 0 ? Theme.dim : Theme.pnl(funding))
+                    .frame(width: 70, alignment: .trailing)
+                    .help(T("Funding betaald (−) of ontvangen (+) sinds je instapte"))
+            }
             Group {
                 if sl == nil {
                     HStack(spacing: 6) {
@@ -165,15 +237,18 @@ struct PositionRow: View {
             }
             .frame(width: 170, alignment: .leading)
             Group {
-                if let r = state.resultAtStop(pos) {
+                if let r = m?.low ?? state.resultAtStop(pos), sl != nil {
                     Text(state.fmt.signedUsd(r)).mono(11).foregroundStyle(Theme.pnl(r))
-                        .help(T("Hele trade bij stop: \(state.fmt.signedUsd(r, decimals: 2)) (\(Fmt.percent(r / max(state.account.accountValue, 1), decimals: 2)) van je account), fees en al gerealiseerde delen meegerekend"))
+                        .help(T("Hele trade bij stop: \(state.fmt.signedUsd(r, decimals: 2)) (\(Fmt.percent(r / eq, decimals: 2)) van je account), fees en al gerealiseerde delen meegerekend"))
                 } else {
                     Text("–").foregroundStyle(Theme.dim)
                 }
             }
             .frame(width: 70, alignment: .trailing)
-            Text(pos.liquidationPx.map { Fmt.price($0) } ?? "–").mono(11).foregroundStyle(Theme.dim).frame(width: 70, alignment: .trailing)
+            two(pos.liquidationPx.map { Fmt.price($0) } ?? "–", liqDist.map { Fmt.percent(-$0, decimals: 1) } ?? "",
+                subColor: (liqDist ?? 1) < 0.05 ? Theme.orange : Theme.dim, color: Theme.dim)
+                .frame(width: 80, alignment: .trailing)
+                .help(T("Liquidatieprijs en hoe ver de koers daarvan af is"))
             Spacer(minLength: 4)
             HStack(spacing: 4) {
                 Button("½") { state.requestClose(fraction: 0.5, coin: pos.coin) }.buttonStyle(MiniButtonStyle()).help(T("Helft sluiten (market)"))
@@ -187,13 +262,28 @@ struct PositionRow: View {
             .disabled(state.busy)
         }
         .font(.system(size: 12))
-        .padding(.horizontal, 12).padding(.vertical, 7)
+        .padding(.horizontal, 12).padding(.vertical, 6)
         .background(hovering ? Color.white.opacity(0.03) : (pos.coin == state.coin ? Theme.card.opacity(0.6) : Color.clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { state.goToPosition(pos.coin) }
         .onTapGesture { state.coin = pos.coin }
         .overlay(alignment: .bottom) { Divider().overlay(Theme.line) }
+    }
+
+    /// Under the result: % of the account and R, or ROE (result ÷ margin) when chosen.
+    private func pnlDetail(net: Double, eq: Double, meter m: TradeMeter?) -> String {
+        if state.pnlShowsROE { return T("ROE \(Fmt.percent(net / max(pos.marginUsed, 1e-9), decimals: 1))") }
+        let pct = Fmt.percent(net / eq, decimals: 2)
+        guard let r = m?.r(net) else { return pct }
+        return pct + " · " + (r >= 0 ? "+" : "−") + Fmt.number(abs(r), decimals: 1) + "R"
+    }
+
+    private func two(_ a: String, _ b: String, subColor: Color = Theme.dim, color: Color = Theme.text) -> some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(a).mono(11.5).foregroundStyle(color)
+            Text(b).mono(10).foregroundStyle(subColor)
+        }
     }
 }
 
