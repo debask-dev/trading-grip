@@ -103,6 +103,7 @@ Close-order: {}% @ {}	Close order: {}% @ {}
 Close-order	Close order
 VERKLEIN {}  ·  {}	REDUCE {}  ·  {}
 TP{} · {}%  wacht op entry	TP{} · {}%  waiting for entry
+SLUIT	CLOSE
 SLUIT {}%	CLOSE {}%
 {} {}  ·  gem. {}  ·  netto {}  ({})	{} {}  ·  avg {}  ·  net {}  ({})
 BE {}  ·  break-even na fees{}	BE {}  ·  break-even after fees{}

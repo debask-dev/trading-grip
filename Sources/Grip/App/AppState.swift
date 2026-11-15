@@ -956,6 +956,26 @@ final class AppState: ObservableObject {
         await refreshAccount()
     }
 
+    /// Result of a stop or take-profit for the open position or, without one, for the resting entry orders
+    /// it belongs to (fees included). Nil when there is nothing to measure against.
+    func setupOutcome(_ o: OpenOrder, at px: Double? = nil) -> Double? {
+        guard o.isTrigger || o.reduceOnly else { return nil }
+        let px = px ?? (pendingOrderPrices[o.oid] ?? o.displayPx)
+        let exitFee = o.isTrigger && o.tpsl != .tp ? feeRates.taker : feeRates.maker
+        if let pos = position {
+            if o.isTrigger && o.tpsl == .sl { return tradeResult(pos, at: px) }
+            let qty = o.size > 0 ? min(o.size, abs(pos.size)) : abs(pos.size)
+            return (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1) - qty * px * exitFee
+        }
+        let entries = coinOrders.filter { !$0.isTrigger && !$0.reduceOnly && $0.isBuy != o.isBuy }
+        let total = entries.reduce(0) { $0 + $1.size }
+        guard total > 0 else { return nil }
+        let avg = entries.reduce(0) { $0 + $1.size * $1.displayPx } / total
+        let qty = o.size > 0 ? min(o.size, total) : total
+        let isLong = !o.isBuy
+        return (px - avg) * qty * (isLong ? 1 : -1) - qty * (avg * feeRates.maker + px * exitFee)
+    }
+
     func orderName(_ o: OpenOrder) -> String {
         if o.isTrigger { return o.tpsl == .tp ? T("Take-profit") : T("Stop-loss") }
         if o.reduceOnly { return T("Close-order") }
@@ -1047,6 +1067,12 @@ final class AppState: ObservableObject {
                 let pnl = (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1)
                 let name = o.isTrigger ? (o.tpsl == .tp ? "TP" : "SL") : T("SLUIT \(Int((qty / abs(pos.size) * 100).rounded()))%")
                 return "\(name)  \(f.signedUsd(pnl))  (\(Fmt.percent(pnl / eq, decimals: 1)))"
+            }
+            if o.isTrigger || o.reduceOnly {
+                // Stop or TP waiting for an unfilled entry: show what it means for the coming trade.
+                let name = o.isTrigger ? (o.tpsl == .tp ? "TP" : "SL") : T("SLUIT")
+                guard let pnl = setupOutcome(o, at: px) else { return "\(name)  \(Fmt.price(px))" }
+                return "\(name)  \(f.signedUsd(pnl))  (\(Fmt.percent(pnl / eq, decimals: 2)))"
             }
             return T("LIMIT \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))")
         case .position:

@@ -779,6 +779,9 @@ struct OrdersCard: View {
                         Circle().fill(color(o)).frame(width: 7, height: 7)
                         Text(state.orderName(o)).font(.system(size: 12))
                         Spacer()
+                        if let pnl = state.setupOutcome(o) {
+                            Text(state.fmt.signedUsd(pnl)).mono(11).foregroundStyle(pnl < 0 ? Theme.red : Theme.green)
+                        }
                         Text(Fmt.price(state.pendingOrderPrices[o.oid] ?? o.displayPx)).mono(12)
                         Button {
                             Task { await state.cancelOrder(o.oid) }
