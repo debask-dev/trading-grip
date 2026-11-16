@@ -393,13 +393,21 @@ extension AppState {
     // MARK: Placing
 
     /// Asks for confirmation first when part of it is a market order (setting).
+    /// A market order without a stop: nothing limits the loss but liquidation. Placing it takes a held button
+    /// (or, from the keyboard, the question).
+    var ticketNeedsHold: Bool {
+        guard let t = ticket, !t.reduceOnly, t.isMarket else { return false }
+        return !t.useStopLoss && existingStopOrder == nil
+    }
+
     func requestPlaceTicket() {
         guard let t = ticket, let pl = plan else { return }
-        guard t.isMarket && confirmMarketOrders else { Task { await placeTicket() }; return }
+        guard t.isMarket && (confirmMarketOrders || ticketNeedsHold) else { Task { await placeTicket() }; return }
         let side = t.isLong ? "long" : "short"
         let what = t.reduceOnly ? T("Verkleinen (market)") : (pl.isAdd ? T("Market bijkopen (\(side))") : T("Market \(side) openen"))
         var msg = T("\(fmt.size(pl.entrySizes.first ?? 0, coin: coin, decimals: szDecimals)) · ≈ \(Fmt.price(price)) · \(t.leverage ?? pl.leverage)×")
         if let risk = pl.riskUsd { msg += T("\nRisico tot je stop: \(fmt.usd(-risk, decimals: 2))\(pl.isAdd ? " voor de hele positie" : "")") }
+        else if !t.reduceOnly { msg += T("\nZonder stop-loss: alleen liquidatie begrenst je verlies.") }
         if let r = pl.reducePnl { msg += T("\nResultaat van dit deel ≈ \(fmt.signedUsd(r, decimals: 2))") }
         pendingConfirm = ConfirmRequest(title: what + "?", message: msg, confirmTitle: what, destructive: t.reduceOnly) { [weak self] in
             Task { await self?.placeTicket() }

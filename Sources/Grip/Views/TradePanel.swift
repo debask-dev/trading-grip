@@ -3,7 +3,8 @@ import SwiftUI
 import AppKit
 import GripCore
 
-/// Three tabs: Risico (size from your max loss), Bedrag (size you choose), Positie (everything after you're in).
+/// Two tabs. Order: one form for a new order, sized by your max loss, by an amount or by a share of the account.
+/// Positie: everything after you're in.
 struct TradePanel: View {
     @EnvironmentObject var state: AppState
 
@@ -11,13 +12,25 @@ struct TradePanel: View {
         ScrollView {
             VStack(spacing: 14) {
                 AccountCard()
-                Picker("", selection: $state.panelMode) {
-                    ForEach(PanelMode.allCases) { m in
-                        Text(m == .position && state.position != nil ? "\(m.label) ●" : m.label).tag(m)
-                    }
+                Picker("", selection: Binding(get: { state.panelMode == .position },
+                                              set: { state.panelMode = $0 ? .position : state.lastOrderMode })) {
+                    Text(T("Order")).tag(false)
+                    Text(state.position != nil ? T("Positie") + " ●" : T("Positie")).tag(true)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+
+                if state.panelMode != .position {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(T("GROOTTE VIA")).font(.system(size: 9.5, weight: .semibold)).tracking(0.6).foregroundStyle(Theme.dim)
+                        Picker("", selection: $state.panelMode) {
+                            ForEach(PanelMode.sizing) { m in Text(m.label).tag(m) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .help(T("Max verlies: Grip rekent de grootte uit je stop. Bedrag: je kiest zelf marge en hefboom. % account: een vast deel van je account, stop daarna."))
+                    }
+                }
 
                 switch state.panelMode {
                 case .fast:
@@ -85,6 +98,7 @@ struct NewTradeButtons: View {
                  ? T("Je kiest je max verlies en waar je stop staat; Grip rekent uit hoe groot de positie wordt.")
                  : T("Je kiest zelf hoeveel en met welke hefboom. Stop en take-profit zijn optioneel."))
                 .font(.system(size: 11)).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
@@ -152,13 +166,16 @@ struct QuickCard: View {
             } else if let w = pl?.warnings.first {
                 Label(T(w), systemImage: "exclamationmark.triangle.fill").font(.system(size: 11)).foregroundStyle(Theme.orange)
             }
-            Button { state.placeQuick() } label: {
-                Text(T("\(long ? "Long" : "Short") \(Int(state.quickPct))% · \(state.quickMarket ? "market" : "limit " + Fmt.price(state.ticket?.entry ?? state.price))"))
-                    .frame(maxWidth: .infinity)
+            let quickTitle = T("\(long ? "Long" : "Short") \(Int(state.quickPct))% · \(state.quickMarket ? "market" : "limit " + Fmt.price(state.ticket?.entry ?? state.price))")
+            let quickOff = state.busy || state.quickBlocked != nil || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true)
+            if state.quickMarket {
+                HoldButton(title: quickTitle, color: sideColor, textColor: long ? Color(nsColor: NSColor(hex: 0x04150E)) : .white, disabled: quickOff) { state.placeQuick() }
+            } else {
+                Button { state.placeQuick() } label: { Text(quickTitle).frame(maxWidth: .infinity) }
+                    .buttonStyle(BigButtonStyle(color: sideColor, textColor: long ? Color(nsColor: NSColor(hex: 0x04150E)) : .white))
+                    .disabled(quickOff)
             }
-            .buttonStyle(BigButtonStyle(color: sideColor, textColor: long ? Color(nsColor: NSColor(hex: 0x04150E)) : .white))
-            .disabled(state.busy || state.quickBlocked != nil || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true))
-            Text(state.quickMarket ? T("Direct, zonder vraag. Stop en take-profit zet je daarna in Positie.")
+            Text(state.quickMarket ? T("Houd de knop even ingedrukt: market zonder stop. Stop en take-profit zet je daarna in Positie.")
                                    : T("De limit staat als lijn in de chart; sleep om de prijs te kiezen. Stop en take-profit daarna."))
                 .font(.system(size: 10.5)).foregroundStyle(Theme.dim).multilineTextAlignment(.center).frame(maxWidth: .infinity)
         }
@@ -338,7 +355,7 @@ struct TicketCard: View {
         let reduce = t?.reduceOnly == true
         let adding = pl?.isAdd == true
         let byRisk = t?.riskSized == true
-        let more = state.showMoreOptions || (t?.entries.count ?? 1) > 1 || (t?.tps.count ?? 0) > 1
+        let hold = state.ticketNeedsHold
         Card(title: title(t, adding: adding), trailing: AnyView(pill(t, adding: adding))) {
             if !reduce && !adding, let t {
                 HStack(spacing: 6) {
@@ -348,7 +365,7 @@ struct TicketCard: View {
             }
             Picker("", selection: Binding(get: { state.ticket?.isMarket ?? false }, set: { state.ticket?.isMarket = $0 })) {
                 Text(T("Limit")).tag(false)
-                Text(more && (t?.entries.count ?? 1) > 1 ? T("E1 market") : T("Market")).tag(true)
+                Text((t?.entries.count ?? 1) > 1 ? T("E1 market") : T("Market")).tag(true)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
@@ -358,28 +375,14 @@ struct TicketCard: View {
 
             Divider().overlay(Theme.line)
 
-            entrySection(t, more: more, reduce: reduce)
+            entrySection(t, reduce: reduce)
             if !reduce {
                 stopSection(t, pl, byRisk: byRisk)
                 if adding && (t?.tps.isEmpty ?? true) && !state.existingTPOrders.isEmpty {
                     ExistingTPsView(plan: pl)
                 } else {
-                    tpSection(t, pl, more: more, byRisk: byRisk)
+                    tpSection(t, pl, byRisk: byRisk)
                 }
-            }
-            if !reduce {
-                Button {
-                    state.showMoreOptions.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(more ? T("Minder ▾") : T("Meer ▸")).fontWeight(.semibold)
-                        if !more { Text(T("gespreid instappen · meerdere TP's")).foregroundStyle(Theme.dim) }
-                    }
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled((t?.entries.count ?? 1) > 1 || (t?.tps.count ?? 0) > 1)
             }
 
             Divider().overlay(Theme.line)
@@ -401,19 +404,31 @@ struct TicketCard: View {
                     .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
                     .frame(width: 92)
                     .keyboardShortcut(.cancelAction)
-                Button {
-                    state.requestPlaceTicket()
-                } label: {
-                    HStack {
-                        if state.busy { ProgressView().controlSize(.small) }
-                        Text(placeTitle(t, adding: adding))
+                let off = pl == nil || state.busy || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true)
+                let sideColor = reduce ? Theme.orange : ((t?.isLong ?? true) ? Theme.green : Theme.red)
+                if hold {
+                    // Market without a stop: hold the button. ⌘↩ asks first.
+                    HoldButton(title: placeTitle(t, adding: adding), color: sideColor, disabled: off) { Task { await state.placeTicket() } }
+                        .demoAnchor("btn-place")
+                        .background(Button("") { state.requestPlaceTicket() }.keyboardShortcut(.return, modifiers: .command).opacity(0).disabled(off))
+                } else {
+                    Button {
+                        state.requestPlaceTicket()
+                    } label: {
+                        HStack {
+                            if state.busy { ProgressView().controlSize(.small) }
+                            Text(placeTitle(t, adding: adding))
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(BigButtonStyle(color: sideColor))
+                    .disabled(off)
+                    .demoAnchor("btn-place")
+                    .keyboardShortcut(.return, modifiers: .command)
                 }
-                .buttonStyle(BigButtonStyle(color: reduce ? Theme.orange : ((t?.isLong ?? true) ? Theme.green : Theme.red)))
-                .disabled(pl == nil || state.busy || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true))
-                .demoAnchor("btn-place")
-                .keyboardShortcut(.return, modifiers: .command)
+            }
+            if hold {
+                Text(T("Market zonder stop: houd de knop even ingedrukt.")).font(.system(size: 10.5)).foregroundStyle(Theme.orange)
             }
             if !state.canTrade {
                 Text(T("Om te handelen: koppel een account met API-wallet (⇧⌘A)."))
@@ -484,11 +499,11 @@ struct TicketCard: View {
     }
 
     @ViewBuilder
-    private func entrySection(_ t: Ticket?, more: Bool, reduce: Bool) -> some View {
+    private func entrySection(_ t: Ticket?, reduce: Bool) -> some View {
         let entries = t?.entries ?? []
         let tick = state.priceTick
+        let more = entries.count > 1
         ForEach(Array(entries.enumerated()), id: \.element.id) { i, e in
-            if i == 0 || more {
                 HStack(spacing: 6) {
                     let label = entries.count > 1 ? "E\(i + 1)" : (reduce ? T("Prijs") : T("Entry"))
                     if t?.isMarket == true && i == 0 {
@@ -504,9 +519,10 @@ struct TicketCard: View {
                     if entries.count > 1 {
                         NumberField(value: e.pct, step: 5, decimals: 0, range: 5...95, suffix: "%", width: 34) { state.setEntryPct(i, $0) }
                         RemoveButton(help: T("Entry weghalen")) { state.removeTicketEntry(i) }
+                    } else if !reduce {
+                        PlusButton(help: T("Gespreid instappen: nog een entry")) { state.addTicketEntry() }
                     }
                 }
-            }
         }
         if more {
             HStack(spacing: 6) {
@@ -535,7 +551,9 @@ struct TicketCard: View {
                 Text(pl?.isAdd == true ? T("Stop (hele positie)") : T("Stop-loss")).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
                 Spacer(minLength: 4)
                 if t.useStopLoss || byRisk {
-                    unitToggle(state.stopInPct) { state.stopInPct.toggle() }
+                    Button(state.stopInPct ? Fmt.price(t.stopLoss) : "−" + Fmt.number(abs(pct), decimals: 2) + "%") { state.stopInPct.toggle() }
+                        .buttonStyle(.plain).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Theme.dim)
+                        .help(T("Afstand vanaf de \((t.entries.count > 1) ? "gem. entry" : "entry"). Klik om prijs of % in te vullen."))
                     if state.stopInPct {
                         NumberField(value: pct, step: 0.05, decimals: 2, color: Theme.red, range: 0.01...99, suffix: "%") { v in
                             state.setTicketStop(entry * (1 - dir * v / 100))
@@ -547,16 +565,13 @@ struct TicketCard: View {
                     }
                 }
             }
-            if t.useStopLoss || byRisk {
-                Text(state.stopInPct ? "= \(Fmt.price(t.stopLoss))" : T("\(Fmt.number(-abs(pct), decimals: 2))% vanaf \((t.entries.count > 1) ? "gem. entry" : "entry")"))
-                    .font(.system(size: 10)).foregroundStyle(Theme.dim).frame(maxWidth: .infinity, alignment: .trailing)
-            }
         }
     }
 
     @ViewBuilder
-    private func tpSection(_ t: Ticket?, _ pl: Plan?, more: Bool, byRisk: Bool) -> some View {
+    private func tpSection(_ t: Ticket?, _ pl: Plan?, byRisk: Bool) -> some View {
         if let t {
+            let more = t.tps.count > 1
             let entry = state.averageEntry(t)
             let dir: Double = t.isLong ? 1 : -1
             if t.tps.isEmpty {
@@ -567,7 +582,6 @@ struct TicketCard: View {
                 }
             }
             ForEach(Array(t.tps.enumerated()), id: \.element.id) { i, tp in
-                if i == 0 || more {
                     let pct = entry > 0 ? dir * (tp.price - entry) / entry * 100 : 0
                     HStack(spacing: 6) {
                         if i == 0 && t.tps.count == 1 {
@@ -575,7 +589,11 @@ struct TicketCard: View {
                         }
                         Text(t.tps.count > 1 ? "TP\(i + 1)" : T("Take-profit")).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
                         Spacer(minLength: 4)
-                        if i == 0 { unitToggle(state.tpInPct) { state.tpInPct.toggle() } }
+                        if t.tps.count == 1 {
+                            Button(state.tpInPct ? Fmt.price(tp.price) : "+" + Fmt.number(abs(pct), decimals: 2) + "%") { state.tpInPct.toggle() }
+                                .buttonStyle(.plain).font(.system(size: 10.5, design: .monospaced)).foregroundStyle(Theme.dim)
+                                .help(T("Wissel tussen prijs en % vanaf de entry"))
+                        } else if i == 0 { unitToggle(state.tpInPct) { state.tpInPct.toggle() } }
                         if state.tpInPct {
                             NumberField(value: pct, step: 0.05, decimals: 2, color: Theme.green, range: 0.01...1000, suffix: "%", width: t.tps.count > 1 ? 64 : 96) { v in
                                 state.setTicketTP(i, entry * (1 + dir * v / 100))
@@ -584,14 +602,22 @@ struct TicketCard: View {
                             NumberField(value: tp.price, step: state.priceTick, decimals: priceDecimals, grouping: true, color: Theme.green,
                                         range: state.priceTick...1e12, width: t.tps.count > 1 ? 64 : 96) { state.setTicketTP(i, $0) }
                         }
-                        if t.tps.count > 1 || more || tp.pct < 99.5 {
+                        if t.tps.count > 1 || tp.pct < 99.5 {
                             NumberField(value: tp.pct, step: 5, decimals: 0, range: 1...100, suffix: "%", width: 34) { state.setTPPct(i, $0) }
                         }
                         if t.tps.count > 1 {
                             RemoveButton(help: T("Take-profit weghalen")) { state.removeTicketTP(i) }
+                        } else {
+                            Menu {
+                                Button(T("Nog een take-profit")) { state.addTicketTP() }
+                                Button(T("Alleen de helft sluiten (rest loopt tot je stop)")) { state.setTPPct(0, 50) }
+                            } label: {
+                                Image(systemName: "plus.circle.fill").foregroundStyle(Theme.accent)
+                            }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                            .help(T("Meerdere take-profits, of maar een deel sluiten"))
                         }
                     }
-                }
             }
             if !t.tps.isEmpty && state.ticketTPCover < 99.5 {
                 CoverageBar(levels: t.tps.map(\.pct))
@@ -630,22 +656,19 @@ struct TicketCard: View {
                 KV(T("Resultaat van dit deel ≈"), state.fmt.signedUsd(pl.reducePnl ?? 0, decimals: 2), color: Theme.pnl(pl.reducePnl ?? 0))
                 KV(T("Positie na"), state.fmt.size(pl.after.size, coin: state.coin, decimals: state.szDecimals))
             } else {
+                // One bar: what the stop costs against what the take-profits bring (whole trade when adding).
+                RiskRewardBar(loss: pl.riskUsd.map { state.fmt.usd(-$0, decimals: 2) + " · " + Fmt.number(pl.riskPercentActual ?? 0, decimals: 2) + "%" },
+                              win: pl.potentialProfit.map { state.fmt.signedUsd($0, decimals: 2) + (pl.rewardRisk.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? "") },
+                              ratio: pl.rewardRisk)
+                    .help(adding ? T("Risico en winst van de hele trade, na fees") : T("Risico tot je stop en winst bij je take-profits, na fees"))
                 if t?.riskSized == true && !adding {
-                    KV(T("Grootte"), "\(state.fmt.size(pl.size, coin: state.coin, decimals: state.szDecimals)) · \(state.fmt.usd(pl.notional))")
-                    KV(T("Hefboom · marge"), T("\(t?.leverage ?? pl.leverage)× · \(state.fmt.usd(pl.marginRequired))"))
+                    Text("\(state.fmt.size(pl.size, coin: state.coin, decimals: state.szDecimals)) · \(state.fmt.usd(pl.notional)) · \(t?.leverage ?? pl.leverage)× · " + T("marge \(state.fmt.usd(pl.marginRequired))"))
+                        .mono(10.5).foregroundStyle(Theme.muted).frame(maxWidth: .infinity, alignment: .trailing)
                 }
                 if (t?.entries.count ?? 1) > 1 { KV(adding ? T("Gem. entry bijkoop") : T("Gem. entry als alles vult"), Fmt.price(pl.avgEntry), color: Theme.blue) }
-                if let risk = pl.riskUsd {
-                    KV(adding ? T("Risico hele trade") : T("Risico tot stop"), "\(state.fmt.usd(-risk, decimals: 2)) · \(Fmt.number(pl.riskPercentActual ?? 0, decimals: 2))%", color: Theme.red)
-                } else {
-                    KV(T("Risico"), T("geen stop-loss"), color: Theme.orange)
-                }
                 if let first = pl.riskFirstEntryOnly { KV(T("Als alleen E1 vult"), state.fmt.usd(-first, decimals: 2), color: Theme.red) }
-                if let p = pl.potentialProfit {
-                    KV(T("Winst · R:R"), "\(state.fmt.signedUsd(p, decimals: 2))\(pl.rewardRisk.map { " · " + Fmt.number($0, decimals: 1) + "R" } ?? "")", color: Theme.green)
-                }
-                KV(T("Fees ≈"), state.fmt.usd(pl.estFees, decimals: 2), color: Theme.muted)
-                if !adding { KV(T("Liquidatie ≈"), Fmt.price(pl.estLiquidationPx), color: Theme.orange) }
+                Text((adding ? "" : T("liquidatie ≈ \(Fmt.price(pl.estLiquidationPx))") + " · ") + T("fees ≈ \(state.fmt.usd(pl.estFees, decimals: 2))"))
+                    .mono(10.5).foregroundStyle(Theme.dim).frame(maxWidth: .infinity, alignment: .trailing)
             }
         }
     }
@@ -739,6 +762,7 @@ struct PositionSummary: View {
 struct PositionTab: View {
     @EnvironmentObject var state: AppState
     @State private var fraction = 0.5
+    private var priceDecimals: Int { max(0, -Int(floor(log10(state.priceTick) + 1e-9))) }
 
     var body: some View {
         if let pos = state.position {
@@ -759,13 +783,29 @@ struct PositionTab: View {
                     MarginRow(pos: pos)
                     KV(T("Gem. entry"), Fmt.price(pos.entryPx), color: Theme.blue)
                     if let be = state.breakEven { KV(T("Break-even"), Fmt.price(be), color: Theme.muted) }
-                    KV(T("Stop-loss"), sl.map { Fmt.price($0.displayPx) } ?? T("geen"), color: sl == nil ? Theme.orange : Theme.red)
+                    // Stop and a single take-profit are typed right here; the line in the chart moves along.
+                    if let sl {
+                        FieldRow(label: T("Stop-loss")) {
+                            NumberField(value: state.pendingOrderPrices[sl.oid] ?? sl.displayPx, step: state.priceTick, decimals: priceDecimals, grouping: true,
+                                        color: Theme.red, range: state.priceTick...1e12) { state.scheduleMove(oid: sl.oid, to: $0) }
+                        }
+                    } else {
+                        KV(T("Stop-loss"), T("geen"), color: Theme.orange)
+                    }
                     if let r = state.resultAtStop(pos) {
                         KV(T("Hele trade bij stop"), "\(state.fmt.signedUsd(r, decimals: 2)) · \(Fmt.percent(r / eq, decimals: 2))", color: Theme.pnl(r))
                     }
                     let cover = TPEditor.coverage(state.currentTPs)
-                    KV(T("Take-profit"), tps.isEmpty ? T("geen") : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · ") + (cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : ""),
-                       color: tps.isEmpty ? Theme.muted : (cover < 0.995 ? Theme.orange : Theme.green))
+                    if tps.count == 1, let tp = tps.first {
+                        FieldRow(label: T("Take-profit") + (cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : "")) {
+                            NumberField(value: state.pendingOrderPrices[tp.oid] ?? tp.displayPx, step: state.priceTick, decimals: priceDecimals, grouping: true,
+                                        color: Theme.green, range: state.priceTick...1e12) { state.scheduleMove(oid: tp.oid, to: $0) }
+                            PlusButton(help: T("Meerdere take-profits of een andere verdeling")) { state.startTPEdit() }
+                        }
+                    } else {
+                        KV(T("Take-profit"), tps.isEmpty ? T("geen") : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · ") + (cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : ""),
+                           color: tps.isEmpty ? Theme.muted : (cover < 0.995 ? Theme.orange : Theme.green))
+                    }
                     if let liq = pos.liquidationPx { KV(T("Liquidatie"), Fmt.price(liq), color: Theme.orange) }
                     if let ot, ot.realized != 0 { KV(T("Al gerealiseerd"), state.fmt.signedUsd(ot.realized, decimals: 2), color: Theme.pnl(ot.realized)) }
                 }
@@ -815,7 +855,7 @@ struct PositionTab: View {
             VStack(spacing: 8) {
                 Image(systemName: "tray").font(.system(size: 22)).foregroundStyle(Theme.dim)
                 Text(T("Geen open positie in \(state.coin).")).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
-                Text(T("Open een trade via Risico of Bedrag. Hier beheer je hem daarna: bijkopen, verkleinen, stop verplaatsen."))
+                Text(T("Open een trade in het tabblad Order. Hier beheer je hem daarna: bijkopen, verkleinen, stop verplaatsen."))
                     .font(.system(size: 11)).foregroundStyle(Theme.dim).multilineTextAlignment(.center)
             }
             .padding(.vertical, 24)
@@ -837,6 +877,80 @@ struct MarginRow: View {
         let slotNote = slot != nil ? T("; een vak is \(state.fmt.usd(state.slotMargin)) (1/\(state.maxPositions) van je account)") : ""
         return KV(T("Marge"), text, color: (slot ?? 0) > 1 ? Theme.orange : Theme.text)
             .help(T("Marge die deze positie vastzet (positiewaarde ÷ hefboom\(pos.isCross ? ", cross" : ", isolated")). Het percentage is van je portfolio\(slotNote)."))
+    }
+}
+
+/// Risk against reward in one glance: red for what the stop costs, green for what the take-profits bring.
+struct RiskRewardBar: View {
+    var loss: String?
+    var win: String?
+    var ratio: Double?
+    var body: some View {
+        GeometryReader { g in
+            // The split follows R:R, kept between a third and three quarters so both texts fit.
+            let share = win == nil ? 1.0 : min(max(1 / (1 + (ratio ?? 1)), 0.34), 0.6)
+            HStack(spacing: 2) {
+                Text(loss ?? T("geen stop-loss")).lineLimit(1).minimumScaleFactor(0.7)
+                    .padding(.horizontal, 7).frame(width: max(g.size.width * share - 1, 0), height: 24, alignment: .leading)
+                    .foregroundStyle(loss == nil ? Theme.orange : Theme.red)
+                    .background((loss == nil ? Theme.orange : Theme.red).opacity(0.16))
+                if let win {
+                    Text(win).lineLimit(1).minimumScaleFactor(0.7)
+                        .padding(.horizontal, 7).frame(width: max(g.size.width * (1 - share) - 1, 0), height: 24, alignment: .trailing)
+                        .foregroundStyle(Theme.green)
+                        .background(Theme.green.opacity(0.16))
+                }
+            }
+            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+        }
+        .frame(height: 24)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+}
+
+/// A button you hold for a moment (market order without a stop): it fills while you hold and fires when full.
+struct HoldButton: View {
+    var title: String
+    var color: Color
+    var textColor: Color = Color(nsColor: NSColor(hex: 0x04150E))
+    var disabled = false
+    var action: () -> Void
+    @State private var pressing = false
+
+    var body: some View {
+        Text(title)
+            .font(.system(size: 13.5, weight: .semibold))
+            .foregroundStyle(textColor)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11).padding(.horizontal, 10)
+            .background(
+                GeometryReader { g in
+                    ZStack(alignment: .leading) {
+                        color.opacity(0.55)
+                        color.frame(width: pressing ? g.size.width : 0)
+                    }
+                }
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .opacity(disabled ? 0.5 : 1)
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.6, maximumDistance: 40, perform: {
+                pressing = false
+                if !disabled { action() }
+            }, onPressingChanged: { down in
+                withAnimation(down ? .linear(duration: 0.6) : .easeOut(duration: 0.15)) { pressing = down && !disabled }
+            })
+            .help(T("Houd ingedrukt om te plaatsen"))
+    }
+}
+
+struct PlusButton: View {
+    var help: String
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) { Image(systemName: "plus.circle.fill").foregroundStyle(Theme.accent) }
+            .buttonStyle(.plain)
+            .help(help)
     }
 }
 

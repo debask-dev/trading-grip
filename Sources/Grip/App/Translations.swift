@@ -41,6 +41,25 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Order	Order
+% account	% account
+GROOTTE VIA	SIZE BY
+Max verlies: Grip rekent de grootte uit je stop. Bedrag: je kiest zelf marge en hefboom. % account: een vast deel van je account, stop daarna.	Max loss: Grip works out the size from your stop. Amount: you choose margin and leverage. % account: a fixed share of your account, stop afterwards.
+Houd de knop even ingedrukt: market zonder stop. Stop en take-profit zet je daarna in Positie.	Hold the button for a moment: market without a stop. Set stop and take-profit afterwards in Position.
+Market zonder stop: houd de knop even ingedrukt.	Market without a stop: hold the button for a moment.
+Houd ingedrukt om te plaatsen	Hold to place
+\nZonder stop-loss: alleen liquidatie begrenst je verlies.	\nNo stop-loss: only liquidation limits your loss.
+Gespreid instappen: nog een entry	Scale in: one more entry
+Afstand vanaf de {}. Klik om prijs of % in te vullen.	Distance from the {}. Click to type a price or a %.
+Nog een take-profit	One more take-profit
+Alleen de helft sluiten (rest loopt tot je stop)	Close only half (the rest runs until your stop)
+Meerdere take-profits, of maar een deel sluiten	Several take-profits, or close only a part
+Risico en winst van de hele trade, na fees	Risk and profit of the whole trade, after fees
+Risico tot je stop en winst bij je take-profits, na fees	Risk to your stop and profit at your take-profits, after fees
+liquidatie ≈ {}	liquidation ≈ {}
+fees ≈ {}	fees ≈ {}
+Meerdere take-profits of een andere verdeling	Several take-profits or another split
+Open een trade in het tabblad Order. Hier beheer je hem daarna: bijkopen, verkleinen, stop verplaatsen.	Open a trade in the Order tab. Manage it here afterwards: add, reduce, move the stop.
 Je saldo is nog niet geladen. Wacht even of ververs (⌘R).	Your balance has not loaded yet. Wait a moment or refresh (⌘R).
 Stop van je positie niet verplaatst: {}	Stop of your position not moved: {}
 Stop niet verplaatst	Stop not moved

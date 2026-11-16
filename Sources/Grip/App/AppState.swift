@@ -32,12 +32,14 @@ enum PanelMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var label: String {
         switch self {
-        case .fast: return T("Snel")
-        case .risk: return T("Risico")
+        case .fast: return T("% account")
+        case .risk: return T("Max verlies")
         case .amount: return T("Bedrag")
         case .position: return T("Positie")
         }
     }
+    /// The three ways to size a new order (the Order tab); Positie is the other tab.
+    static let sizing: [PanelMode] = [.risk, .amount, .fast]
     /// Stored value from older versions (risk / quick / manual).
     static func stored(_ raw: String?) -> PanelMode {
         switch raw {
@@ -339,8 +341,18 @@ final class AppState: ObservableObject {
         didSet { saveJSON(eventPrefs, "eventPrefs") }
     }
     @Published var panelMode: PanelMode = PanelMode.stored(UserDefaults.standard.string(forKey: "panelMode")) {
-        didSet { defaults.set(panelMode.rawValue, forKey: "panelMode"); panelModeChanged(oldValue) }
+        didSet {
+            defaults.set(panelMode.rawValue, forKey: "panelMode")
+            if panelMode != .position { lastOrderMode = panelMode }
+            panelModeChanged(oldValue)
+        }
     }
+    /// How the Order tab sized last (to come back to from Positie).
+    var lastOrderMode: PanelMode = PanelMode.stored(UserDefaults.standard.string(forKey: "orderMode")) {
+        didSet { defaults.set(lastOrderMode.rawValue, forKey: "orderMode") }
+    }
+    /// Stop and take-profit prices typed in Positie, sent a moment after the last change.
+    var pendingMoves: [Int64: DispatchWorkItem] = [:]
     /// Last used take-profit split, e.g. [50, 30, 20].
     @Published var lastSplit: [Double] = UserDefaults.standard.array(forKey: "lastSplit") as? [Double] ?? [50, 30, 20] {
         didSet { defaults.set(lastSplit, forKey: "lastSplit") }
@@ -998,6 +1010,21 @@ final class AppState: ObservableObject {
             toast(error.localizedDescription, .error)
         }
         await refreshAccount()
+    }
+
+    /// A price typed (or stepped with ↑↓) for an open order: the chart line moves at once, the order a moment
+    /// after the last change, so holding an arrow key sends one change instead of twenty.
+    func scheduleMove(oid: Int64, to raw: Double) {
+        let px = roundToTick(raw)
+        pendingOrderPrices[oid] = px
+        pendingMoves[oid]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingMoves[oid] = nil
+            Task { await self.moveOrder(oid: oid, to: px) }
+        }
+        pendingMoves[oid] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7, execute: work)
     }
 
     /// All stop-loss orders of a coin. A ladder has one per entry until every entry is filled.
