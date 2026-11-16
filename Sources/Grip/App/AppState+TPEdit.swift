@@ -187,7 +187,10 @@ extension AppState {
         defer { busy = false }
         do {
             try await execModify(oid: o.oid, request(for: o, asset: a, price: px, size: size))
-            if isStop { managed[o.coin]?.stop = px }
+            if isStop {
+                managed[o.coin]?.stop = px
+                try await moveOtherStops(coin: o.coin, asset: a, to: px, except: o.oid)
+            }
             // An entry that has not filled yet: its linked stop and take-profit follow the new size.
             if !o.reduceOnly && !o.isTrigger && position == nil, o.size > 0, abs(size - o.size) > 1e-12 {
                 for c in coinOrders where c.reduceOnly && c.isBuy != o.isBuy && abs(c.size - o.size) < 1e-12 {

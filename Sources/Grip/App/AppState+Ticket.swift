@@ -407,9 +407,14 @@ extension AppState {
     }
 
     func placeTicket() async {
+        // One at a time: a second ⌘↩ or click while the first order is on its way must not send it again.
+        guard !busy else { return }
         guard let t = ticket, let a = asset, let pl = plan else { return }
         guard pl.size > 0 else { toast(T("Vul een grootte in."), .error); return }
         guard hasAccount else { toast(T("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan."), .error); return }
+        // Without a known balance the size was worked out on the $10.000 example: never send that.
+        guard !isExampleEquity else { toast(T("Je saldo is nog niet geladen. Wacht even of ververs (⌘R)."), .error); return }
+        if let why = pl.blockers.first { toast(T(why), .error); return }
         for (k, s) in pl.entrySizes.enumerated() where s > 0 {
             let px = t.isMarket && k == 0 ? price : t.entries[k].price
             if s * px < 10 && !t.reduceOnly {
@@ -468,8 +473,29 @@ extension AppState {
                 reqs.append(OrderRequest(asset: a, isBuy: !isBuy, size: pl.size, limitPx: tp, reduceOnly: true,
                                          kind: .trigger(triggerPx: tp, isMarket: false, tpsl: .tp)))
             }
-            let statuses = try await execOrders(reqs, grouping: simple ? "normalTpsl" : "na")
-            let rejected = statuses.compactMap { if case .error(let e) = $0 { return e } else { return nil } }
+            // What came back per entry, and everything that was refused.
+            var statuses: [OrderStatus] = []
+            var rejected: [String] = []
+            if !simple, let stop {
+                // A ladder or an add: every entry goes with its own stop linked to it, so the exchange protects the
+                // trade as soon as an entry fills, also when Grip is closed. Grip merges them into one stop later.
+                let entries = reqs
+                for (k, r) in entries.enumerated() {
+                    let sl = OrderRequest(asset: a, isBuy: !isBuy, size: r.size, limitPx: stop, reduceOnly: true,
+                                          kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl))
+                    do {
+                        let st = try await execOrders([r, sl], grouping: "normalTpsl")
+                        statuses.append(st.first ?? .success)
+                        rejected += st.dropFirst().compactMap { if case .error(let e) = $0 { return e } else { return nil } }
+                    } catch {
+                        if k == 0 { throw error }            // nothing placed yet
+                        statuses.append(.error(error.localizedDescription))
+                    }
+                }
+            } else {
+                statuses = try await execOrders(reqs, grouping: simple ? "normalTpsl" : "na")
+            }
+            rejected += statuses.compactMap { if case .error(let e) = $0 { return e } else { return nil } }
 
             // From here Grip keeps stop and take-profits in line with the position.
             var m = managed[c] ?? ManagedTrade(isLong: isBuy, lastSize: 0)
@@ -491,14 +517,19 @@ extension AppState {
 
             // Adding with a moved stop: move the position's stop now.
             if let pos, let stop {
-                if let sl = existingStopOrder {
-                    if abs(sl.displayPx - stop) > priceTick / 2 {
-                        try? await execModify(oid: sl.oid, OrderRequest(asset: a, isBuy: !pos.isLong, size: sl.size > 0 ? sl.size : abs(pos.size), limitPx: stop,
-                                                                       reduceOnly: true, kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl)))
+                do {
+                    if let sl = existingStopOrder {
+                        if abs(sl.displayPx - stop) > priceTick / 2 {
+                            try await execModify(oid: sl.oid, OrderRequest(asset: a, isBuy: !pos.isLong, size: sl.size > 0 ? sl.size : abs(pos.size), limitPx: stop,
+                                                                           reduceOnly: true, kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl)))
+                        }
+                    } else {
+                        try throwIfRejected(try await execOrders([OrderRequest(asset: a, isBuy: !pos.isLong, size: abs(pos.size), limitPx: stop, reduceOnly: true,
+                                                                               kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl))]))
                     }
-                } else {
-                    _ = try? await execOrders([OrderRequest(asset: a, isBuy: !pos.isLong, size: abs(pos.size), limitPx: stop, reduceOnly: true,
-                                                            kind: .trigger(triggerPx: stop, isMarket: true, tpsl: .sl))])
+                } catch {
+                    toast(T("Stop van je positie niet verplaatst: \(error.localizedDescription)"), .error)
+                    notify(.orderProblem, T("Stop niet verplaatst"), "\(c): \(error.localizedDescription)")
                 }
             }
 
@@ -551,8 +582,11 @@ extension AppState {
     }
 
     private func reconcileOnce() async {
-        for (c, m) in managed {
-            guard let a = assets.first(where: { $0.name == c }) else { continue }
+        let scope = tradeScope
+        for c in managed.keys.sorted() {
+            // Switched account or practice mode while working: these trades belong to the other one.
+            guard scope == tradeScope else { return }
+            guard let m = managed[c], let a = assets.first(where: { $0.name == c }) else { continue }
             let step = TradeKeeper.step(m, position: account.position(for: c), orders: account.orders(for: c), szDecimals: a.szDecimals)
             var ok = true
             for action in step.actions {
@@ -567,7 +601,14 @@ extension AppState {
             if step.cancelledEntries > 0 {
                 toast(T("\(c)-trade gesloten: \(step.cancelledEntries) niet-gevulde entr\(step.cancelledEntries > 1 ? "ies" : "y") geannuleerd"), .info)
             }
-            if ok {
+            guard scope == tradeScope else { return }
+            if let cur = managed[c], cur != m {
+                // An order was placed or changed for this coin while the keeper worked: keep those changes and
+                // only note what the keeper did (never write the older state back over them).
+                if ok { managed[c] = Self.merge(current: cur, seen: m, next: step.next) }
+            } else if managed[c] == nil {
+                // Removed in the meantime (reverse, account change): leave it removed.
+            } else if ok {
                 managed[c] = step.next
                 if step.next == nil { breakEvenAfterTP.remove(c) }
             } else {
@@ -582,13 +623,31 @@ extension AppState {
                 }
             }
             if !step.actions.isEmpty {
-                if let fresh = try? await refreshedState() {
+                accountRequestID += 1
+                let requestID = accountRequestID
+                if let fresh = try? await refreshedState(), scope == tradeScope, requestID > accountAppliedID {
+                    accountAppliedID = requestID
                     let before = account.positions.map { "\($0.coin)\($0.size)" }
                     account = fresh
                     if before != fresh.positions.map({ "\($0.coin)\($0.size)" }) { refreshHistorySoon() }
                 }
             }
         }
+    }
+
+    /// The keeper's result applied to a trade that changed while it worked: entries it saw disappear are dropped,
+    /// a ladder it placed is not placed again, and the size it brought in line is remembered.
+    static func merge(current cur: ManagedTrade, seen m: ManagedTrade, next: ManagedTrade?) -> ManagedTrade? {
+        var out = cur
+        let gone = Set(m.entryOids).subtracting(next?.entryOids ?? [])
+        out.entryOids.removeAll { gone.contains($0) }
+        if m.tps != nil, next?.tps == nil, cur.tps == m.tps { out.tps = nil }
+        guard let next else {
+            out.lastSize = 0
+            return out.entryOids.isEmpty ? nil : out
+        }
+        out.lastSize = next.lastSize
+        return out
     }
 
     private func refreshedState() async throws -> AccountState {

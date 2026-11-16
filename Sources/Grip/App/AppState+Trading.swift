@@ -18,11 +18,14 @@ extension AppState {
         let px = HLFormat.roundPrice(be, szDecimals: a.szDecimals)
         // Only ever move the stop in the safe direction.
         guard pos.isLong ? px > sl.displayPx : px < sl.displayPx else { breakEvenAfterTP.remove(c); return }
-        let req = OrderRequest(asset: a, isBuy: !pos.isLong, size: abs(pos.size), limitPx: px, reduceOnly: true,
+        // One stop: it covers the whole position. Several (a ladder that is not complete yet): each keeps its size.
+        let single = stopOrders(c).count <= 1
+        let req = OrderRequest(asset: a, isBuy: !pos.isLong, size: single ? abs(pos.size) : (sl.size > 0 ? sl.size : abs(pos.size)), limitPx: px, reduceOnly: true,
                                kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl))
         do {
             try await execModify(oid: sl.oid, req)
             managed[c]?.stop = px
+            try await moveOtherStops(coin: c, asset: a, to: px, except: sl.oid)
             breakEvenAfterTP.remove(c)
             toast(T("Stop-loss naar break-even: \(Fmt.price(px))"), .success)
         } catch {

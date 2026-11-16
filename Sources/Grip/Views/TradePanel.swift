@@ -157,7 +157,7 @@ struct QuickCard: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(BigButtonStyle(color: sideColor, textColor: long ? Color(nsColor: NSColor(hex: 0x04150E)) : .white))
-            .disabled(state.busy || state.quickBlocked != nil || (pl?.size ?? 0) <= 0)
+            .disabled(state.busy || state.quickBlocked != nil || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true))
             Text(state.quickMarket ? T("Direct, zonder vraag. Stop en take-profit zet je daarna in Positie.")
                                    : T("De limit staat als lijn in de chart; sleep om de prijs te kiezen. Stop en take-profit daarna."))
                 .font(.system(size: 10.5)).foregroundStyle(Theme.dim).multilineTextAlignment(.center).frame(maxWidth: .infinity)
@@ -272,6 +272,12 @@ struct NumberField: View {
             return Double(t)
         }
         if grouping, t.range(of: #"^-?\d{1,3}(\.\d{3})+(,\d+)?$"#, options: .regularExpression) != nil {
+            // "64.350" is 64350 for BTC, but "2.345" typed with a point is 2,345 for a coin of a few dollars.
+            // Without a comma both readings are possible: take the one nearest to what the field shows now.
+            if !t.contains(","), let asDecimal = Double(t), let asThousands = Double(t.replacingOccurrences(of: ".", with: "")),
+               value > 0, asDecimal > 0, abs(log(asDecimal / value)) < abs(log(asThousands / value)) {
+                return asDecimal
+            }
             t = t.replacingOccurrences(of: ".", with: "")
         }
         if t.contains(",") { t = t.replacingOccurrences(of: ".", with: "").replacingOccurrences(of: ",", with: ".") }
@@ -382,8 +388,10 @@ struct TicketCard: View {
                 if let before = pl.before, adding { BeforeAfterView(before: before, after: pl.after, plan: pl) }
                 summary(t, pl, reduce: reduce, adding: adding)
                 ForEach(pl.warnings + state.budgetWarnings(pl), id: \.self) { w in
-                    Label(T(w), systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11)).foregroundStyle(Theme.orange)
+                    // Red stops the order, orange only tells.
+                    let blocks = pl.blockers.contains(w)
+                    Label(T(w), systemImage: blocks ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                        .font(.system(size: 11)).foregroundStyle(blocks ? Theme.red : Theme.orange)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -403,7 +411,7 @@ struct TicketCard: View {
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(BigButtonStyle(color: reduce ? Theme.orange : ((t?.isLong ?? true) ? Theme.green : Theme.red)))
-                .disabled(pl == nil || state.busy || (pl?.size ?? 0) <= 0)
+                .disabled(pl == nil || state.busy || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true))
                 .demoAnchor("btn-place")
                 .keyboardShortcut(.return, modifiers: .command)
             }

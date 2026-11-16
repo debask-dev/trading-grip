@@ -54,7 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// With the menu bar icon on, closing the window leaves Grip running: it keeps stops and take-profits in line
+    /// and can be opened again from the menu bar. Without the icon there is no way back, so then it quits.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !(UserDefaults.standard.object(forKey: "showMenuBar") as? Bool ?? true)
+    }
 }
 
 struct GripCommands: Commands {

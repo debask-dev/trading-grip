@@ -246,7 +246,7 @@ public final class PaperExchange: Codable, @unchecked Sendable {
         let lev = leverage[coin] ?? (holdings[coin].map { ($0.leverage, $0.isCross) } ?? (1, true))
         if abs(end) < 1e-12 {
             holdings[coin] = nil
-            orders.removeAll { $0.coin == coin && ($0.reduceOnly || $0.isPositionTpsl) }
+            orders.removeAll { $0.coin == coin && ($0.reduceOnly || $0.isPositionTpsl) && $0.parentOid == nil }
         } else if start == 0 || (start > 0) != (end > 0) {
             holdings[coin] = Holding(size: end, entry: px, leverage: lev.0, isCross: lev.1)   // new or flipped
         } else if abs(end) > abs(start) {

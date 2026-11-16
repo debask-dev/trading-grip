@@ -262,4 +262,52 @@ final class OrderFlowTests: XCTestCase {
         XCTAssertTrue(try keep(p, &m).isEmpty)                         // the keeper leaves it alone
         XCTAssertEqual(stops(p).first?.size ?? 0, 0.1, accuracy: 1e-9) // the stop still covers everything
     }
+
+    /// A ladder sends every entry with its own linked stop, so the exchange protects the trade without Grip.
+    func testLadderEntriesCarryTheirOwnStopUntilAllFilled() throws {
+        let p = PaperExchange(balance: 10_000)
+        p.updateLeverage(coin: "BTC", isCross: true, leverage: 5)
+        var oids: [Int64] = []
+        for px in [64_800.0, 64_500.0] {
+            let st = try p.place([
+                OrderRequest(asset: btc, isBuy: true, size: 0.05, limitPx: px, reduceOnly: false, kind: .limit(tif: "Gtc")),
+                OrderRequest(asset: btc, isBuy: false, size: 0.05, limitPx: 64_000, reduceOnly: true, kind: .trigger(triggerPx: 64_000, isMarket: true, tpsl: .sl)),
+            ], grouping: "normalTpsl", marks: marks)
+            if case .resting(let o)? = st.first { oids.append(o) }
+        }
+        var m: ManagedTrade? = ManagedTrade(isLong: true, stop: 64_000, entryOids: oids, lastSize: 0)
+        move(p, to: 64_790)                               // E1 fills: its own stop is live, E2's still waits
+        var actions = try keep(p, &m)
+        XCTAssertTrue(actions.isEmpty)
+        XCTAssertEqual(stops(p).count, 2)
+        move(p, to: 64_490)                               // E2 fills: one stop for the whole position
+        actions = try keep(p, &m)
+        XCTAssertEqual(stops(p).count, 1)
+        XCTAssertEqual(stops(p).first?.size ?? 0, 0.1, accuracy: 1e-9)
+        move(p, to: 63_990)                               // stop hit: flat, nothing left
+        try keep(p, &m)
+        XCTAssertNil(state(p).position(for: "BTC"))
+        XCTAssertTrue(state(p).orders(for: "BTC").isEmpty)
+    }
+
+    /// The stop is hit after E1 only: the position is flat without Grip, and the keeper removes E2 with its stop.
+    func testLadderStopWorksWithoutKeeperAndCleansUp() throws {
+        let p = PaperExchange(balance: 10_000)
+        p.updateLeverage(coin: "BTC", isCross: true, leverage: 5)
+        var oids: [Int64] = []
+        for px in [64_800.0, 63_500.0] {
+            let st = try p.place([
+                OrderRequest(asset: btc, isBuy: true, size: 0.05, limitPx: px, reduceOnly: false, kind: .limit(tif: "Gtc")),
+                OrderRequest(asset: btc, isBuy: false, size: 0.05, limitPx: 64_000, reduceOnly: true, kind: .trigger(triggerPx: 64_000, isMarket: true, tpsl: .sl)),
+            ], grouping: "normalTpsl", marks: marks)
+            if case .resting(let o)? = st.first { oids.append(o) }
+        }
+        var m: ManagedTrade? = ManagedTrade(isLong: true, stop: 64_000, entryOids: oids, lastSize: 0)
+        move(p, to: 64_790)
+        move(p, to: 63_990)                               // no keeper run in between
+        XCTAssertNil(state(p).position(for: "BTC"))
+        m?.lastSize = 0.05                                // what the keeper had seen if it had run
+        try keep(p, &m)
+        XCTAssertTrue(state(p).orders(for: "BTC").isEmpty)
+    }
 }

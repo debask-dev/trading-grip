@@ -41,6 +41,9 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Je saldo is nog niet geladen. Wacht even of ververs (⌘R).	Your balance has not loaded yet. Wait a moment or refresh (⌘R).
+Stop van je positie niet verplaatst: {}	Stop of your position not moved: {}
+Stop niet verplaatst	Stop not moved
 Order deels geweigerd	Order partly rejected
 Order niet geplaatst	Order not placed
 {} mislukt: {}	{} failed: {}

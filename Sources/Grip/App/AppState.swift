@@ -405,14 +405,19 @@ final class AppState: ObservableObject {
     @Published var quickLev: Int = UserDefaults.standard.object(forKey: "quickLev") as? Int ?? 5 { didSet { defaults.set(quickLev, forKey: "quickLev") } }
     @Published var quickSLPct: Double = UserDefaults.standard.object(forKey: "quickSLPct") as? Double ?? 0.5 { didSet { defaults.set(quickSLPct, forKey: "quickSLPct") } }
     @Published var quickTPPct: Double = UserDefaults.standard.object(forKey: "quickTPPct") as? Double ?? 1.0 { didSet { defaults.set(quickTPPct, forKey: "quickTPPct") } }
-    @Published var managed: [String: ManagedTrade] = AppState.loadJSON([String: ManagedTrade].self, "managedTrades") ?? [:] {
-        didSet { saveJSON(managed, "managedTrades") }
+    /// Trades Grip keeps in line. Stored per account (and apart for practice), so a stop or take-profit ladder
+    /// of one account is never applied to another.
+    @Published var managed: [String: ManagedTrade] = [:] {
+        didSet { saveJSON(managed, "managedTrades-" + tradeScope) }
     }
     var reconciling = false
-    /// Coins whose stop moves to break-even after the first take-profit.
-    @Published var breakEvenAfterTP: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "breakEvenAfterTP") ?? []) {
-        didSet { defaults.set(Array(breakEvenAfterTP), forKey: "breakEvenAfterTP") }
+    /// Coins whose stop moves to break-even after the first take-profit (per account, like `managed`).
+    @Published var breakEvenAfterTP: Set<String> = [] {
+        didSet { if !isDemoVideo { defaults.set(Array(breakEvenAfterTP), forKey: "breakEvenAfterTP-" + tradeScope) } }
     }
+    /// Newest account answer that was applied; an older answer arriving late is dropped.
+    var accountRequestID = 0
+    var accountAppliedID = 0
     @Published var hourStats: HourStats?
     @Published var screenshotFolder: String = UserDefaults.standard.string(forKey: "screenshotFolder")
         ?? (FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first?.appendingPathComponent("Grip").path ?? NSHomeDirectory()) {
@@ -487,6 +492,28 @@ final class AppState: ObservableObject {
         trendlines = demo ? [] : (store.load([Trendline].self, from: "trendlines") ?? [])
         plans = demo ? [] : (store.load([TradePlan].self, from: "plans") ?? [])
         agentAddress = (try? loadSigner())?.address
+        if !demo {
+            // Before 0.1.x these were stored once for everything: hand them to the account that is active now.
+            if defaults.data(forKey: "managedTrades-" + tradeScope) == nil, let old = defaults.data(forKey: "managedTrades") {
+                defaults.set(old, forKey: "managedTrades-" + tradeScope)
+                defaults.set(defaults.stringArray(forKey: "breakEvenAfterTP") ?? [], forKey: "breakEvenAfterTP-" + tradeScope)
+            }
+            defaults.removeObject(forKey: "managedTrades")
+            defaults.removeObject(forKey: "breakEvenAfterTP")
+            loadManaged()
+        }
+    }
+
+    /// Which account the kept trades belong to: practice per network, otherwise network + address.
+    var tradeScope: String {
+        if paperMode { return isDemoVideo ? "paper-demo" : "paper-\(network.rawValue)" }
+        return "\(network.rawValue)-\(accountAddress.lowercased().trimmingCharacters(in: .whitespacesAndNewlines))"
+    }
+
+    /// Loads the kept trades of the account that is active now (after switching account, network or practice mode).
+    func loadManaged() {
+        managed = Self.loadJSON([String: ManagedTrade].self, "managedTrades-" + tradeScope) ?? [:]
+        breakEvenAfterTP = Set(defaults.stringArray(forKey: "breakEvenAfterTP-" + tradeScope) ?? [])
     }
 
     // MARK: Derived
@@ -626,6 +653,8 @@ final class AppState: ObservableObject {
         client = HLClient(network: network)
         stream = HLStream(network: network)
         account = .empty
+        accountAppliedID = accountRequestID
+        loadManaged()
         fills = []
         closedTrades = []
         portfolio = [:]
@@ -644,6 +673,8 @@ final class AppState: ObservableObject {
 
     private func accountChanged() {
         account = .empty
+        accountAppliedID = accountRequestID      // answers still on their way belong to the previous account
+        loadManaged()
         announcedTids = []
         fills = []
         closedTrades = []
@@ -748,8 +779,14 @@ final class AppState: ObservableObject {
             return
         }
         guard hasAccount else { return }
+        accountRequestID += 1
+        let requestID = accountRequestID
         do {
             let state = try await client.accountState(user: accountAddress.trimmingCharacters(in: .whitespaces))
+            // Refreshes overlap (timer, fills). An answer that was asked before the one already shown is older
+            // news: showing it would let the keeper act on a position or order that is no longer there.
+            guard requestID > accountAppliedID, !paperMode else { return }
+            accountAppliedID = requestID
             // Position or orders changed (a fill, a TP/SL hit): fetch the fills now instead of waiting.
             let oldPositions = Dictionary(account.positions.map { ($0.coin, $0.size) }, uniquingKeysWith: { a, _ in a })
             let newPositions = Dictionary(state.positions.map { ($0.coin, $0.size) }, uniquingKeysWith: { a, _ in a })
@@ -927,6 +964,8 @@ final class AppState: ObservableObject {
 
     private func modeChanged() {
         account = .empty
+        accountAppliedID = accountRequestID
+        loadManaged()
         announcedTids = []
         fills = []
         closedTrades = []
@@ -949,13 +988,27 @@ final class AppState: ObservableObject {
         let req = OrderRequest(asset: a, isBuy: o.isBuy, size: size, limitPx: px, reduceOnly: o.reduceOnly, kind: kind)
         do {
             try await execModify(oid: oid, req)
-            if o.isTrigger && o.tpsl == .sl { managed[o.coin]?.stop = px }
+            if o.isTrigger && o.tpsl == .sl {
+                managed[o.coin]?.stop = px
+                try await moveOtherStops(coin: o.coin, asset: a, to: px, except: oid)
+            }
             toast(T("\(orderName(o)) verplaatst naar \(Fmt.price(px))"), .success)
         } catch {
             pendingOrderPrices[oid] = nil
             toast(error.localizedDescription, .error)
         }
         await refreshAccount()
+    }
+
+    /// All stop-loss orders of a coin. A ladder has one per entry until every entry is filled.
+    func stopOrders(_ c: String) -> [OpenOrder] { account.orders(for: c).filter { $0.isTrigger && $0.tpsl == .sl && $0.reduceOnly } }
+
+    /// Moves the other stops of the coin to the same price, so the trade keeps one stop level.
+    func moveOtherStops(coin c: String, asset a: AssetInfo, to px: Double, except oid: Int64) async throws {
+        for s in stopOrders(c) where s.oid != oid && s.size > 0 && abs(s.displayPx - px) > 1e-12 {
+            try await execModify(oid: s.oid, OrderRequest(asset: a, isBuy: s.isBuy, size: s.size, limitPx: px, reduceOnly: true,
+                                                          kind: .trigger(triggerPx: px, isMarket: s.orderType.lowercased().contains("market"), tpsl: .sl)))
+        }
     }
 
     func cancelOrder(_ oid: Int64) async {
@@ -998,6 +1051,7 @@ final class AppState: ObservableObject {
         guard size > 0 else { toast(T("Te kleine hoeveelheid om te sluiten."), .error); return }
         let isBuy = !pos.isLong
         let px = HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
+        guard !busy else { return }
         busy = true
         defer { busy = false }
         do {

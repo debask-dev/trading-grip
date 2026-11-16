@@ -102,6 +102,8 @@ public final class HLClient: @unchecked Sendable {
     private let session: URLSession
     private let nonceLock = NSLock()
     private var lastNonce: UInt64 = 0
+    /// Last account mode that was read, per user (used when that one call fails).
+    private var knownModes: [String: AccountMode] = [:]
 
     public init(network: HLNetwork, session: URLSession = .shared) {
         self.network = network
@@ -168,7 +170,18 @@ public final class HLClient: @unchecked Sendable {
         async let modeRaw = try? info(["type": "userAbstraction", "user": user])
         async let spotRaw = try? info(["type": "spotClearinghouseState", "user": user])
         let (perps, m, spot) = try await (perpsState, modeRaw, spotRaw)
-        let mode = AccountMode(api: m as? String ?? "disabled")
+        let key = user.lowercased()
+        let mode: AccountMode
+        if let raw = m as? String {
+            mode = AccountMode(api: raw)
+            nonceLock.lock(); knownModes[key] = mode; nonceLock.unlock()
+        } else {
+            nonceLock.lock(); let known = knownModes[key]; nonceLock.unlock()
+            mode = known ?? .standard
+        }
+        // Unified / portfolio margin: the balance is on the spot side. Without it the account value would be
+        // wrong (zero or only the open PnL), so rather no answer than a wrong one.
+        if mode.balancesOnSpot && !(spot is [String: Any]) { throw HLError.decoding("spotClearinghouseState") }
         let balances = await spotBalances(from: spot)
         return AccountState.combine(perps: perps, mode: mode, spot: balances)
     }

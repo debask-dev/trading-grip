@@ -113,9 +113,18 @@ public enum TradeKeeper {
         let total = HLFormat.roundSize(size, szDecimals: szDecimals)
         // Whenever the size changed: one stop that covers the whole position (also after a fast move where an entry
         // filled and the stop was hit before Grip could resize it). Unchanged size: leave the stop to the user.
-        let sl = orders.first { $0.isTrigger && $0.tpsl == .sl }
+        // A ladder or an add brings one stop per entry (linked on the exchange, so the trade is protected while
+        // Grip is closed). While entries still wait, those stops are left alone; once nothing waits, they are
+        // merged into one stop for the whole position.
+        let stops = orders.filter { $0.isTrigger && $0.tpsl == .sl && $0.reduceOnly }
+        let sl = stops.first
         let changed = abs(size - m.lastSize) > 1e-12
         if !changed {
+        } else if stops.count > 1 {
+            if next.entryOids.isEmpty, let first = sl {
+                for extra in stops.dropFirst() { actions.append(.cancel(oid: extra.oid)) }
+                actions.append(.resizeStop(oid: first.oid, size: total, price: m.stop ?? first.displayPx))
+            }
         } else if let sl {
             let px = m.stop ?? sl.displayPx
             if sl.size > 0 && (abs(sl.size - total) > 1e-12 || abs(sl.displayPx - px) > 1e-12) {

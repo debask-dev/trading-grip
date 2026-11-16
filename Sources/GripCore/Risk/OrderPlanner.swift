@@ -79,6 +79,8 @@ public struct Plan: Equatable, Sendable {
     public var before: PositionSnapshot?
     public var after: PositionSnapshot
     public var warnings: [String]
+    /// The warnings that make the order impossible or dangerous to send (a subset of `warnings`).
+    public var blockers: [String] = []
 
     public var estLiquidationPx: Double { after.estLiquidationPx }
     public var marginRequired: Double { after.margin }
@@ -111,6 +113,8 @@ public enum OrderPlanner {
         let avg = zip(levels, fracs).reduce(0) { $0 + $1.0.price * $1.1 }
         let dir: Double = i.isLong ? 1 : -1
         var warnings: [String] = []
+        var blockers: [String] = []
+        func block(_ s: String) { warnings.append(s); blockers.append(s) }
 
         let existing = i.existing.flatMap { $0.size > 0 ? $0 : nil }
         let isReduce = existing.map { $0.isLong != i.isLong } ?? false
@@ -120,7 +124,7 @@ public enum OrderPlanner {
         var stop = i.stopLoss
         if let s = stop, isReduce { _ = s; stop = nil }
         if let s = stop, dir * (avg - s) <= 0 {
-            warnings.append("Stop-loss ligt aan de verkeerde kant van de entry.")
+            block("Stop-loss ligt aan de verkeerde kant van de entry.")
             stop = nil
         }
 
@@ -159,12 +163,13 @@ public enum OrderPlanner {
         }
         if size > 0 {
             for (k, s) in entrySizes.enumerated() where s * levels[k].price < 10 {
-                warnings.append(levels.count > 1 ? "E\(k + 1) is kleiner dan het Hyperliquid-minimum van $10 per order." : "Hyperliquid vereist minimaal $10 per order.")
+                let text = levels.count > 1 ? "E\(k + 1) is kleiner dan het Hyperliquid-minimum van $10 per order." : "Hyperliquid vereist minimaal $10 per order."
+                if isReduce { warnings.append(text) } else { block(text) }
             }
         } else if i.sizeOverride != nil || i.riskPercent == nil {
-            warnings.append("Vul een grootte in.")
+            block("Vul een grootte in.")
         } else {
-            warnings.append("Positie te klein voor de minimale ordergrootte.")
+            block("Positie te klein voor de minimale ordergrootte.")
         }
 
         let notional = size * avg
@@ -187,7 +192,7 @@ public enum OrderPlanner {
         var minLev = max(1, Int((afterNotional / i.accountValue - 1e-9).rounded(.up)))
         if let avail = i.availableMargin, !isReduce, notional > 0 {
             if avail <= 0.01 {
-                warnings.append("Geen vrije marge beschikbaar.")
+                block("Geen vrije marge beschikbaar.")
             } else {
                 // Keep 5% free for fees and price moves.
                 minLev = max(minLev, Int((notional / (avail * 0.95) - 1e-9).rounded(.up)))
@@ -269,6 +274,6 @@ public enum OrderPlanner {
                     notional: notional, leverage: lev, minLeverage: minLev, riskUsd: riskTotal,
                     riskPercentActual: riskTotal.map { $0 / i.accountValue * 100 }, riskFirstEntryOnly: firstOnly,
                     existingRiskUsd: existingLoss, rewardRisk: rr, potentialProfit: profit, estFees: fees,
-                    reducePnl: reducePnl, before: before, after: after, warnings: warnings)
+                    reducePnl: reducePnl, before: before, after: after, warnings: warnings, blockers: blockers)
     }
 }

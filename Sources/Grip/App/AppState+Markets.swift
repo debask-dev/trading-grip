@@ -112,11 +112,12 @@ extension AppState {
     }
 
     func reverse(coin c: String) async {
-        guard let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return }
+        guard !busy, let pos = account.position(for: c), let a = assets.first(where: { $0.name == c }) else { return }
         busy = true
         defer { busy = false }
         do {
-            for o in account.orders(for: c) where o.reduceOnly || o.isTrigger { try? await execCancel(a, oid: o.oid) }
+            // Everything of the old trade goes, also entries that still wait: they would shrink the new position.
+            for o in account.orders(for: c) { try? await execCancel(a, oid: o.oid) }
             managed[c] = nil
             breakEvenAfterTP.remove(c)
             let isBuy = !pos.isLong
