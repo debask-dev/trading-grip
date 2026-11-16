@@ -145,6 +145,13 @@ struct ChartSettingsView: View {
 
             Section(T("Chart")) {
                 Toggle(T("Rasterlijnen"), isOn: $state.chartStyle.showGrid)
+                if state.chartStyle.showGrid {
+                    HStack {
+                        Text(T("Raster sterkte"))
+                        Slider(value: Binding(get: { state.chartStyle.gridOpacity ?? ChartStyle.defaultGridOpacity },
+                                              set: { state.chartStyle.gridOpacity = ($0 * 100).rounded() / 100 }), in: 0.02...0.25)
+                    }
+                }
                 Toggle(T("Volume"), isOn: Binding(
                     get: { state.indicators.contains { $0.kind == .volume && $0.visible } },
                     set: { on in

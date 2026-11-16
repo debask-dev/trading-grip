@@ -41,6 +41,19 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Raster sterkte	Grid strength
+Favorieten in de balk	Favourites in the bar
+Alle timeframes en je favorieten	All timeframes and your favourites
+Een stop aan die kant van de koers gaat direct af. De stop staat terug.	A stop on that side of the price goes off at once. The stop is back where it was.
+Een take-profit aan die kant van de koers vult direct. Hij staat terug.	A take-profit on that side of the price fills at once. It is back where it was.
+De stop moet aan de verlieskant van je entry blijven. Hij staat terug.	The stop must stay on the losing side of your entry. It is back where it was.
+De take-profit moet aan de winstkant van je entry blijven. Hij staat terug.	The take-profit must stay on the winning side of your entry. It is back where it was.
+geen positie	no position
+Open	Open
+liq	liq
+stop	stop
+geen TP	no TP
+Timeframe	Timeframe
 Order	Order
 % account	% account
 GROOTTE VIA	SIZE BY

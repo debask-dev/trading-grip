@@ -111,6 +111,8 @@ struct Toast: Identifiable, Equatable {
     let id = UUID()
     var text: String
     var kind: Kind
+    /// The market the message is about: shown in front, and a click opens it.
+    var coin: String? = nil
 }
 
 extension Array {
@@ -346,6 +348,18 @@ final class AppState: ObservableObject {
             if panelMode != .position { lastOrderMode = panelMode }
             panelModeChanged(oldValue)
         }
+    }
+    /// Timeframes shown as buttons in the header (raw values). The rest is behind the ▾ next to them.
+    @Published var favoriteTimeframes: [String] = UserDefaults.standard.stringArray(forKey: "favoriteTimeframes") ?? Timeframe.defaultFavorites.map(\.rawValue) {
+        didSet { defaults.set(favoriteTimeframes, forKey: "favoriteTimeframes") }
+    }
+    /// Favourites in their natural order, plus the timeframe in use when it is not one of them.
+    var shownTimeframes: [Timeframe] {
+        Timeframe.allCases.filter { favoriteTimeframes.contains($0.rawValue) || $0 == timeframe }
+    }
+    func toggleFavoriteTimeframe(_ tf: Timeframe) {
+        if favoriteTimeframes.contains(tf.rawValue) { favoriteTimeframes.removeAll { $0 == tf.rawValue } }
+        else { favoriteTimeframes.append(tf.rawValue) }
     }
     /// How the Order tab sized last (to come back to from Positie).
     var lastOrderMode: PanelMode = PanelMode.stored(UserDefaults.standard.string(forKey: "orderMode")) {
@@ -992,6 +1006,13 @@ final class AppState: ObservableObject {
         guard let o = account.openOrders.first(where: { $0.oid == oid }),
               let a = assets.first(where: { $0.name == o.coin }) else { pendingOrderPrices[oid] = nil; return }
         let px = HLFormat.roundPrice(newPrice, szDecimals: a.szDecimals)
+        // Hyperliquid changes an order by replacing it: a refused change can cost you the order (and what is linked
+        // to it). So a price that cannot work is stopped here and the line goes back to where it was.
+        if let why = moveProblem(o, to: px) {
+            pendingOrderPrices[oid] = nil
+            toast(why, .error)
+            return
+        }
         let posSize = abs(account.position(for: o.coin)?.size ?? 0)
         let size = o.size > 0 ? o.size : posSize
         let kind: OrderKind = o.isTrigger
@@ -1010,6 +1031,28 @@ final class AppState: ObservableObject {
             toast(error.localizedDescription, .error)
         }
         await refreshAccount()
+    }
+
+    /// Why an open order cannot go to this price (nil = it can): a stop or take-profit past the current price would go
+    /// off at once; a stop past its own entry, or a take-profit before it, is refused by the exchange.
+    func moveProblem(_ o: OpenOrder, to px: Double) -> String? {
+        guard o.isTrigger || o.reduceOnly else { return nil }
+        let isStop = o.isTrigger && o.tpsl == .sl
+        let long = !o.isBuy                      // side of the trade this order closes
+        let pos = account.position(for: o.coin)
+        if pos != nil, let p = livePrice(o.coin), p > 0 {
+            // Stop of a long sits under the price, its take-profit above; a short the other way round.
+            let wrong = (isStop == long) ? px >= p : px <= p
+            if wrong { return isStop ? T("Een stop aan die kant van de koers gaat direct af. De stop staat terug.") : T("Een take-profit aan die kant van de koers vult direct. Hij staat terug.") }
+        } else if pos == nil {
+            let entries = TPEditor.restingEntries(account.orders(for: o.coin), isLong: long)
+            let total = entries.reduce(0) { $0 + $1.size }
+            guard total > 0 else { return nil }
+            let avg = entries.reduce(0) { $0 + $1.size * $1.limitPx } / total
+            let wrong = (isStop == long) ? px >= avg : px <= avg
+            if wrong { return isStop ? T("De stop moet aan de verlieskant van je entry blijven. Hij staat terug.") : T("De take-profit moet aan de winstkant van je entry blijven. Hij staat terug.") }
+        }
+        return nil
     }
 
     /// A price typed (or stepped with ↑↓) for an open order: the chart line moves at once, the order a moment
@@ -1476,10 +1519,10 @@ final class AppState: ObservableObject {
 
     // MARK: Toasts
 
-    func toast(_ raw: String, _ kind: Toast.Kind = .info) {
+    func toast(_ raw: String, _ kind: Toast.Kind = .info, coin: String? = nil) {
         let text = T(raw)      // also translates messages from Hyperliquid and the core
         if kind == .error { NSLog("Grip error: %@", text) }
-        let t = Toast(text: text, kind: kind)
+        let t = Toast(text: text, kind: kind, coin: coin)
         withAnimation(.easeOut(duration: 0.2)) { toasts.append(t) }
         let delay: Double = kind == .error ? 7 : 4
         Task { @MainActor [weak self] in
@@ -1589,7 +1632,7 @@ extension AppState {
             if opening {
                 let side = end > 0 ? T("Long") : T("Short")
                 notifyFill(.entryFilled, coin: c, start == 0 ? T("\(side) \(c) geopend") : T("\(side) \(c) bijgekocht"), "\(sizeText) @ \(Fmt.price(px))")
-                toast("\(start == 0 ? "In trade" : "Bijgekocht"): \(side.lowercased()) \(sizeText) @ \(Fmt.price(px))", .success)
+                toast("\(start == 0 ? "In trade" : "Bijgekocht"): \(side.lowercased()) \(sizeText) @ \(Fmt.price(px))", .success, coin: c)
                 continue
             }
             let realized = group.reduce(0) { $0 + $1.closedPnl - $1.fee }
@@ -1599,17 +1642,17 @@ extension AppState {
                 let how = kind == .stopLoss ? T("Stop-loss") : (kind == .takeProfit ? T("Take-profit") : T("Gesloten"))
                 notifyFill(trade.isWin ? .positionClosed : (kind == .stopLoss ? .stopLoss : .positionClosed), coin: c,
                        T("\(c)-trade gesloten (\(how))"), T("Netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r) · fees \(fmt.usd(trade.fees, decimals: 2))"))
-                toast(T("Trade gesloten: netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r)"), trade.isWin ? .success : .info)
+                toast(T("Trade gesloten: netto \(fmt.signedUsd(trade.netPnl, decimals: 2))\(r)"), trade.isWin ? .success : .info, coin: c)
             } else if kind == .stopLoss {
                 notifyFill(.stopLoss, coin: c, T("Stop-loss \(c) geraakt"), "\(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))")
-                toast(T("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))"), .info)
+                toast(T("Stop-loss geraakt: \(sizeText) @ \(Fmt.price(px))"), .info, coin: c)
             } else {
                 let label = analysis.open[c]?.executions.last(where: { $0.oid == first.oid })?.label ?? T("Deel")
                 if kind == .takeProfit && breakEvenAfterTP.contains(c) {
                     Task { await self.refreshAccount(); await self.moveStopToBreakEven(coin: c) }
                 }
                 notifyFill(kind == .takeProfit ? .takeProfit : .positionClosed, coin: c, T("\(label) \(c) gevuld"), T("\(sizeText) gesloten @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"))
-                toast(T("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"), realized >= 0 ? .success : .info)
+                toast(T("\(label) gevuld: \(sizeText) @ \(Fmt.price(px)) · \(fmt.signedUsd(realized, decimals: 2))"), realized >= 0 ? .success : .info, coin: c)
             }
         }
     }

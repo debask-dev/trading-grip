@@ -266,16 +266,22 @@ struct ToastStack: View {
             ForEach(state.toasts) { t in
                 HStack(spacing: 10) {
                     Circle().fill(color(t.kind)).frame(width: 8, height: 8)
+                    if let c = t.coin { Text(c).font(.system(size: 12.5, weight: .bold)).foregroundStyle(Theme.text) }
                     Text(t.text).font(.system(size: 12.5)).foregroundStyle(Theme.text)
+                    if t.coin != nil { Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.dim) }
                 }
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card.opacity(0.97)))
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
                 .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                 .transition(.move(edge: .top).combined(with: .opacity))
+                .contentShape(Rectangle())
+                // A message about a market takes you there; the others let clicks through to the chart.
+                .onTapGesture { if let c = t.coin { state.coin = c; state.tab = .trade } }
+                .allowsHitTesting(t.coin != nil)
+                .help(t.coin.map { T("Naar \($0)") } ?? "")
             }
         }
-        .allowsHitTesting(false)
     }
 
     private func color(_ k: Toast.Kind) -> Color {
@@ -323,18 +329,38 @@ struct ChartHeader: View {
             .frame(minWidth: 110, alignment: .leading)
 
             HStack(spacing: 2) {
-                ForEach(Array(Timeframe.allCases.enumerated()), id: \.element) { i, tf in
+                // Your favourites, plus the one in use when it is not among them. Everything else sits behind ▾.
+                let shown = state.shownTimeframes
+                ForEach(Array(shown.enumerated()), id: \.element) { i, tf in
                     Button {
                         state.timeframe = tf
                     } label: {
                         Text(tf.label)
                             .font(.system(size: 12, weight: .semibold))
-                            .frame(minWidth: 32, minHeight: 24)
+                            .frame(minWidth: 28, minHeight: 24)
                     }
                     .buttonStyle(HoverButtonStyle(active: state.timeframe == tf, activeFill: Theme.card))
                     .help(T("Timeframe \(tf.label) (⌘\(i + 1) · of typ \(typedHint(tf)) + ⏎ in de chart)"))
                     .demoAnchor("tf-\(tf.rawValue)")
                 }
+                Menu {
+                    Section(T("Timeframe")) {
+                        ForEach(Timeframe.allCases) { tf in
+                            Button(tf.label + (state.timeframe == tf ? "  ✓" : "")) { state.timeframe = tf }
+                        }
+                    }
+                    Section(T("Favorieten in de balk")) {
+                        ForEach(Timeframe.allCases) { tf in
+                            Toggle(tf.label, isOn: Binding(get: { state.favoriteTimeframes.contains(tf.rawValue) },
+                                                           set: { _ in state.toggleFavoriteTimeframe(tf) }))
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).frame(width: 18, height: 24)
+                }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .hoverHighlight()
+                .help(T("Alle timeframes en je favorieten"))
             }
             .padding(3)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.25)))
@@ -376,6 +402,8 @@ struct ChartHeader: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
+                .frame(width: 30, height: 26)
+                .hoverHighlight()
                 .help(T("Indicator toevoegen"))
                 if !state.coinTrendlines.isEmpty {
                     Menu {
@@ -384,7 +412,10 @@ struct ChartHeader: View {
                         Image(systemName: "trash").font(.system(size: 12))
                     }
                     .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
                     .fixedSize()
+                    .frame(width: 30, height: 26)
+                    .hoverHighlight()
                     .help(T("Lijnen wissen"))
                 }
             }
@@ -419,13 +450,12 @@ struct ChartHeader: View {
 
     private func typedHint(_ tf: Timeframe) -> String {
         switch tf {
-        case .m1: return "1"
-        case .m5: return "5"
-        case .m15: return "15"
-        case .h1: return "60"
-        case .h4: return T("4h")
         case .d1: return T("D")
         case .w1: return T("W")
+        default:
+            // Minutes as a number ("15", "240"), or as written ("4h", "3d").
+            let min = tf.milliseconds / 60_000
+            return min <= 60 ? "\(min)" : tf.rawValue
         }
     }
 }

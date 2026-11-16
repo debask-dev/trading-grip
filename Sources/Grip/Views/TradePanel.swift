@@ -1119,13 +1119,13 @@ struct TPEditorView: View {
             }
             ForEach(Array(draft.levels.enumerated()), id: \.element.id) { i, l in
                 HStack(spacing: 6) {
-                    Text("TP\(i + 1)").font(.system(size: 12.5)).foregroundStyle(Theme.muted)
-                    Spacer(minLength: 4)
+                    Text("TP\(i + 1)").font(.system(size: 12.5)).foregroundStyle(Theme.muted).fixedSize()
+                    Spacer(minLength: 2)
                     NumberField(value: l.price, step: state.priceTick, decimals: priceDecimals, grouping: true, color: Theme.green,
-                                range: state.priceTick...1e12, width: 72) { state.setDraftPrice(i, $0) }
-                    NumberField(value: l.pct, step: 5, decimals: 0, range: 1...100, suffix: "%", width: 34) { state.setDraftPct(i, $0) }
+                                range: state.priceTick...1e12, width: 66) { state.setDraftPrice(i, $0) }
+                    NumberField(value: l.pct, step: 5, decimals: 0, range: 1...100, suffix: "%", width: 30) { state.setDraftPct(i, $0) }
                     Text(state.fmt.signedUsd(state.draftProfit(l, isLong: draft.isLong))).mono(10.5).foregroundStyle(Theme.green)
-                        .frame(minWidth: 44, alignment: .trailing)
+                        .lineLimit(1).minimumScaleFactor(0.7).frame(width: 40, alignment: .trailing)
                     RemoveButton(help: T("Take-profit weghalen")) { state.removeDraftTP(i) }
                 }
             }

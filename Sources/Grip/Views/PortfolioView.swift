@@ -58,6 +58,10 @@ struct PortfolioView: View {
                                 LineMark(x: .value(T("Tijd"), p.time), y: .value(T("PnL"), p.value))
                                     .foregroundStyle(Theme.pnl(pnlTotal))
                                     .lineStyle(StrokeStyle(lineWidth: 2))
+                                if pnl.count <= 160 {
+                                    PointMark(x: .value(T("Tijd"), p.time), y: .value(T("PnL"), p.value))
+                                        .foregroundStyle(Theme.pnl(pnlTotal)).symbolSize(16)
+                                }
                                 RuleMark(y: .value(T("Nul"), 0)).foregroundStyle(Theme.dim.opacity(0.4))
                                 if let h = pnlPoint, h.id == p.id {
                                     RuleMark(x: .value(T("Tijd"), h.time))
@@ -84,6 +88,10 @@ struct PortfolioView: View {
                                 LineMark(x: .value(T("Tijd"), p.time), y: .value(T("Waarde"), p.value))
                                     .foregroundStyle(Theme.blue)
                                     .lineStyle(StrokeStyle(lineWidth: 2))
+                                if values.count <= 160 {
+                                    PointMark(x: .value(T("Tijd"), p.time), y: .value(T("Waarde"), p.value))
+                                        .foregroundStyle(Theme.blue).symbolSize(16)
+                                }
                                 if let h = valuePoint, h.id == p.id {
                                     RuleMark(x: .value(T("Tijd"), h.time))
                                         .foregroundStyle(Theme.muted.opacity(0.5))

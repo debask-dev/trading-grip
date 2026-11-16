@@ -32,6 +32,8 @@ struct MenuBarView: View {
                     }
                     Text(T("\(state.fmt.size(p.size, coin: p.coin, decimals: 4)) · gem. \(Fmt.price(p.entryPx)) · netto na fees"))
                         .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    // The same bar as on the position line in the chart: stop on the left, take-profits on the right.
+                    if let cm = state.meter(for: p.coin) { TradeBar(meter: cm.meter, fmt: state.fmt) }
                     HStack(spacing: 6) {
                         Button(T("Sluit 50%")) { confirmClose(p, 0.5) }
                         Button(T("Sluit alles")) { confirmClose(p, 1) }
@@ -75,38 +77,53 @@ struct MenuBarView: View {
     /// Waiting orders on every market, nearest to the price first, so none get forgotten.
     @ViewBuilder private var orders: some View {
         let all = state.ordersByDistance
-        let shown = all.prefix(8)
+        let shown = Array(all.prefix(10))
         section(T("Open orders"), count: all.count)
         if all.isEmpty {
             Text(T("Geen open orders")).foregroundStyle(Theme.muted).font(.system(size: 12))
         } else {
-            VStack(spacing: 0) {
-                ForEach(Array(shown)) { o in
-                    let d = state.distance(o)
-                    let loose = !state.account.positions.contains { $0.coin == o.coin }
+            // Per market, so stop, take-profits and entries of one trade stand together; the market whose order is
+            // nearest to the price comes first.
+            let coins = shown.reduce(into: [String]()) { if !$0.contains($1.coin) { $0.append($1.coin) } }
+            ForEach(coins, id: \.self) { c in
+                let loose = !state.account.positions.contains { $0.coin == c }
+                VStack(spacing: 0) {
                     HStack(spacing: 6) {
-                        Text(o.coin).font(.system(size: 12, weight: .semibold)).frame(width: 46, alignment: .leading).lineLimit(1)
-                        Text(state.orderName(o) + (o.isTrigger || o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
-                            .font(.system(size: 11.5)).foregroundStyle(color(o)).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text(Fmt.price(o.displayPx)).mono(11.5)
-                        Text(d.map { Fmt.number($0 * 100, decimals: $0 < 0.01 ? 2 : 1) + "%" } ?? "–")
-                            .mono(10.5).foregroundStyle((d ?? 1) < 0.005 ? Theme.orange : Theme.muted)
-                            .frame(width: 40, alignment: .trailing)
-                        Button { Task { await state.cancelOrder(o.oid) } } label: {
-                            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                        Text(c).font(.system(size: 12, weight: .bold))
+                        if loose { Text(T("geen positie")).font(.system(size: 10)).foregroundStyle(Theme.orange) }
+                        Spacer()
+                        Button(T("Open")) {
+                            state.coin = c; state.tab = .trade
+                            NSApp.activate(ignoringOtherApps: true)
+                            openWindow(id: "main")
                         }
-                        .buttonStyle(.borderless).foregroundStyle(Theme.muted)
-                        .help(T("Annuleer order"))
+                        .buttonStyle(.borderless).font(.system(size: 10.5)).foregroundStyle(Theme.muted)
                     }
-                    .padding(.horizontal, 8).padding(.vertical, 5)
-                    // Orders without a position on that coin are the easiest to forget: mark them.
-                    .background(loose ? Theme.orange.opacity(0.08) : Color.clear)
-                    .help(loose ? T("Geen positie op \(o.coin): deze order staat los open") : "")
+                    .padding(.horizontal, 8).padding(.top, 6).padding(.bottom, 2)
+                    .help(loose ? T("Geen positie op \(c): deze order staat los open") : "")
+                    ForEach(shown.filter { $0.coin == c }) { o in
+                        let d = state.distance(o)
+                        HStack(spacing: 6) {
+                            Circle().fill(color(o)).frame(width: 6, height: 6)
+                            Text(state.orderName(o) + (o.isTrigger || o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
+                                .font(.system(size: 11.5)).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(Fmt.price(o.displayPx)).mono(11.5)
+                            Text(d.map { Fmt.number($0 * 100, decimals: $0 < 0.01 ? 2 : 1) + "%" } ?? "–")
+                                .mono(10.5).foregroundStyle((d ?? 1) < 0.005 ? Theme.orange : Theme.muted)
+                                .frame(width: 40, alignment: .trailing)
+                            Button { Task { await state.cancelOrder(o.oid) } } label: {
+                                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                            }
+                            .buttonStyle(.borderless).foregroundStyle(Theme.muted)
+                            .help(T("Annuleer order"))
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                    }
                 }
+                .padding(.bottom, 3)
+                .background(RoundedRectangle(cornerRadius: 8).fill(loose ? Theme.orange.opacity(0.08) : Theme.card))
             }
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
             if all.count > shown.count {
                 Text(T("+\(all.count - shown.count) meer, zie ⌘J in Grip")).font(.system(size: 11)).foregroundStyle(Theme.muted)
             }
@@ -129,6 +146,46 @@ struct MenuBarView: View {
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn {
             Task { await state.closePosition(fraction: fraction, coin: p.coin) }
+        }
+    }
+}
+
+/// The whole trade as a bar: what the stop costs on the left, what the take-profits bring on the right, and a marker
+/// for where it stands now. The same picture as the bar in the chart's position label.
+struct TradeBar: View {
+    let meter: TradeMeter
+    let fmt: Fmt
+
+    var body: some View {
+        let lo = min(meter.low ?? 0, meter.now, 0), hi = max(meter.high ?? 0, meter.now, 0)
+        let span = max(hi - lo, 1e-9)
+        VStack(spacing: 3) {
+            GeometryReader { g in
+                let w = g.size.width
+                let zero = CGFloat((0 - lo) / span) * w
+                let now = CGFloat((meter.now - lo) / span) * w
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Theme.red.opacity(0.5)).frame(width: max(zero, 0), height: 6)
+                    Rectangle().fill(Theme.green.opacity(0.5)).frame(width: max(w - zero, 0), height: 6).offset(x: zero)
+                    ForEach(Array(meter.marks.enumerated()), id: \.offset) { _, v in
+                        Rectangle().fill(Theme.bg).frame(width: 1.5, height: 6).offset(x: min(max(CGFloat((v - lo) / span) * w, 0), w - 1.5))
+                    }
+                    RoundedRectangle(cornerRadius: 1.5).fill(Theme.text).frame(width: 3, height: 12).offset(x: min(max(now - 1.5, 0), w - 3))
+                }
+                .frame(width: w, height: 12, alignment: .leading)
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            .frame(height: 12)
+            HStack {
+                Text(meter.low.map { (meter.lowIsLiquidation ? T("liq") : T("stop")) + " " + fmt.signedUsd($0) } ?? T("geen stop"))
+                    .foregroundStyle(meter.low == nil || meter.lowIsLiquidation ? Theme.orange : Theme.red)
+                Spacer()
+                if let r = meter.r(meter.now) { Text(Fmt.number(r, decimals: 1) + "R").foregroundStyle(Theme.text) }
+                Spacer()
+                Text(meter.high.map { (meter.openEnded ? "≥ " : "") + fmt.signedUsd($0) } ?? T("geen TP"))
+                    .foregroundStyle(meter.high == nil ? Theme.muted : Theme.green)
+            }
+            .font(.system(size: 10, weight: .medium, design: .monospaced))
         }
     }
 }

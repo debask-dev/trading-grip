@@ -126,6 +126,9 @@ final class ChartCanvas: NSView {
     private var fling: (speed: Double, startOffset: Double, began: CFTimeInterval, duration: Double)?
     private var zoomTarget: (spacing: Double, anchorX: Double, anchorIndex: Double)?
     private var panRemaining: Double = 0
+    /// Trackpad scrolling keeps to one direction per gesture: 1 = through time, 2 = zoom, 0 = not decided yet.
+    private var scrollAxis = 0
+    private var scrollSumX = 0.0, scrollSumY = 0.0
     private var typed = ""
     private var typedClear: Timer?
 
@@ -469,6 +472,9 @@ final class ChartCanvas: NSView {
         return 10 * mag
     }
 
+    /// Grid lines: a light line whose strength is a setting (like TradingView's grid on a dark background).
+    private var gridColor: NSColor { NSColor.white.withAlphaComponent(CGFloat(min(max(style.gridOpacity ?? ChartStyle.defaultGridOpacity, 0), 0.4))) }
+
     private func drawGridAndAxes() {
         let step = niceStep((range.hi - range.lo) / Double(max(plot.height / 56, 2)))
         var p = (range.lo / step).rounded(.up) * step
@@ -477,7 +483,7 @@ final class ChartCanvas: NSView {
             let yy = align(y(p)) + 0.5 / pixelRatio
             if yy > plot.minY + 4 && yy < plot.maxY - 4 {
                 if style.showGrid {
-                    Palette.grid.setStroke()
+                    gridColor.setStroke()
                     hline(yy, from: plot.minX, to: plot.maxX, width: 1)
                 }
                 text(Fmt.price(p), at: CGPoint(x: plot.maxX + 9, y: yy), font: font, color: Palette.dim, align: .left)
@@ -515,7 +521,7 @@ final class ChartCanvas: NSView {
             }
             let xx = align(x(index: Double(i))) + 0.5 / pixelRatio
             if style.showGrid && xx > plot.minX && xx < plot.maxX {
-                Palette.grid.setStroke()
+                gridColor.setStroke()
                 let gl = NSBezierPath()
                 gl.move(to: CGPoint(x: xx, y: plot.minY)); gl.line(to: CGPoint(x: xx, y: timeTop))
                 gl.lineWidth = 1
@@ -1468,7 +1474,20 @@ final class ChartCanvas: NSView {
             stopKinetic()
             zoomTarget = nil
             panRemaining = 0
-            if abs(dx) > abs(dy) {
+            // Fingers never move perfectly straight. Choosing per event made a zoom drift through time; now the
+            // first few points of a gesture decide and the rest (momentum included) follows that one direction.
+            // Clearly turning the other way (three times as much, for a while) switches over.
+            if e.phase == .began || e.phase == .mayBegin { scrollAxis = 0; scrollSumX = 0; scrollSumY = 0 }
+            scrollSumX = scrollSumX * 0.8 + abs(dx)
+            scrollSumY = scrollSumY * 0.8 + abs(dy)
+            if scrollAxis == 0 {
+                guard max(scrollSumX, scrollSumY) >= 3 else { return }
+                scrollAxis = scrollSumX > scrollSumY ? 1 : 2
+            } else if e.momentumPhase == [] {
+                if scrollAxis == 2, scrollSumX > 12, scrollSumX > scrollSumY * 3 { scrollAxis = 1 }
+                else if scrollAxis == 1, scrollSumY > 12, scrollSumY > scrollSumX * 3 { scrollAxis = 2 }
+            }
+            if scrollAxis == 1 {
                 vp.pan(pixels: dx)
             } else if dy != 0 {
                 vp.zoom(factor: min(max(exp(dy * 0.0045), 0.75), 1.33), anchorX: ax)

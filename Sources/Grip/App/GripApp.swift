@@ -68,7 +68,8 @@ struct GripCommands: Commands {
         CommandGroup(replacing: .newItem) {}
 
         CommandMenu(T("Chart")) {
-            ForEach(Array(Timeframe.allCases.enumerated()), id: \.element) { i, tf in
+            // ⌘1…⌘9 follow the timeframes in the header (your favourites).
+            ForEach(Array(state.shownTimeframes.prefix(9).enumerated()), id: \.element) { i, tf in
                 Button(T("Timeframe \(tf.label)")) { state.timeframe = tf }
                     .keyboardShortcut(KeyEquivalent(Character(String(i + 1))), modifiers: .command)
             }

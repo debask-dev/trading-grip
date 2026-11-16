@@ -13,6 +13,9 @@ public struct ChartStyle: Codable, Equatable, Sendable {
     public var hollowUp: Bool
     public var showGrid: Bool
     public var showVolume: Bool
+    /// How visible the grid is: opacity of a light line (nil = the default). Optional so older saved styles still load.
+    public var gridOpacity: Double?
+    public static let defaultGridOpacity = 0.07
 
     public init(upBody: String, downBody: String, upBorder: String, downBorder: String, upWick: String, downWick: String,
                 showBorders: Bool = false, showWicks: Bool = true, hollowUp: Bool = false, showGrid: Bool = true, showVolume: Bool = true) {
@@ -40,7 +43,11 @@ public struct ChartStyle: Codable, Equatable, Sendable {
         ("Grip", .grip), ("Groen/rood", .greenRed), ("Klassiek", .classic), ("Hol", .hollow), ("Monochroom", .monochrome), ("Blauw/oranje", .blueOrange),
     ]
 
-    public var presetName: String? { Self.presets.first { $0.style == self }?.name }
+    public var presetName: String? {
+        var plain = self
+        plain.gridOpacity = nil
+        return Self.presets.first { $0.style == plain }?.name
+    }
 
     /// Quick colors offered for candles (first one: the orange the user uses in TradingView for falling candles).
     public static let swatches = ["#E68538", "#2FD394", "#26A69A", "#089981", "#FF5C6C", "#EF5350", "#F23645", "#5AA2FF", "#E7EBF2", "#5D6676"]

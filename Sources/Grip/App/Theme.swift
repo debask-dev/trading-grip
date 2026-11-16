@@ -96,6 +96,23 @@ struct KV: View {
     }
 }
 
+/// The same hover highlight as `HoverButtonStyle`, for menus (a Menu takes no button style of its own).
+private struct HoverHighlight: ViewModifier {
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(hovering ? 0.09 : 0)))
+            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.white.opacity(hovering ? 0.08 : 0), lineWidth: 1))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: hovering)
+    }
+}
+
+extension View {
+    func hoverHighlight() -> some View { modifier(HoverHighlight()) }
+}
+
 /// Button style for small header/toolbar buttons: hover highlight, pressed state and a full-size click area.
 struct HoverButtonStyle: ButtonStyle {
     var active: Bool

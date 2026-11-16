@@ -1,7 +1,11 @@
 import Foundation
 
 public enum Timeframe: String, CaseIterable, Codable, Identifiable, Sendable {
-    case m1 = "1m", m5 = "5m", m15 = "15m", h1 = "1h", h4 = "4h", d1 = "1d", w1 = "1w"
+    case m1 = "1m", m3 = "3m", m5 = "5m", m15 = "15m", m30 = "30m", h1 = "1h", h2 = "2h", h4 = "4h", h8 = "8h", h12 = "12h",
+         d1 = "1d", d3 = "3d", w1 = "1w"
+
+    /// Shown in the header until you pick your own favourites.
+    public static let defaultFavorites: [Timeframe] = [.m1, .m5, .m15, .h1, .h4, .d1, .w1]
 
     public var id: String { rawValue }
     public var label: String { rawValue }
@@ -9,11 +13,17 @@ public enum Timeframe: String, CaseIterable, Codable, Identifiable, Sendable {
     public var milliseconds: Int64 {
         switch self {
         case .m1: return 60_000
+        case .m3: return 180_000
         case .m5: return 300_000
         case .m15: return 900_000
+        case .m30: return 1_800_000
         case .h1: return 3_600_000
+        case .h2: return 7_200_000
         case .h4: return 14_400_000
+        case .h8: return 28_800_000
+        case .h12: return 43_200_000
         case .d1: return 86_400_000
+        case .d3: return 259_200_000
         case .w1: return 604_800_000
         }
     }
@@ -23,11 +33,17 @@ public enum Timeframe: String, CaseIterable, Codable, Identifiable, Sendable {
         let s = raw.lowercased().trimmingCharacters(in: .whitespaces)
         switch s {
         case "1", "1m": return .m1
+        case "3", "3m": return .m3
         case "5", "5m": return .m5
         case "15", "15m": return .m15
+        case "30", "30m": return .m30
         case "60", "1h", "h": return .h1
+        case "120", "2h": return .h2
         case "240", "4h": return .h4
+        case "480", "8h": return .h8
+        case "720", "12h": return .h12
         case "d", "1d", "24h": return .d1
+        case "3d": return .d3
         case "w", "1w", "7d": return .w1
         default: return nil
         }
