@@ -41,6 +41,16 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Smart money concepts	Smart money concepts
+Klik voor een andere kleur	Click for another colour
++ lijn	+ line
+Marktstructuur (BOS / CHoCH)	Market structure (BOS / CHoCH)
+Order blocks	Order blocks
+Fair value gaps	Fair value gaps
+Liquiditeit (gelijke highs / lows)	Liquidity (equal highs / lows)
+Premium / discount	Premium / discount
+Gevoeligheid swings	Swing sensitivity
+Aantal candles links en rechts dat lager (hoger) moet zijn. Hoger = minder, grotere swings.	Candles on each side that must be lower (higher). Higher = fewer, larger swings.
 Setup aanpassen · {}	Change setup · {}
 Wijzig setup	Change setup
 Lijnen uit	Lines off

@@ -571,7 +571,7 @@ final class AppState: ObservableObject {
 
     /// Saved indicators; older versions only had the volume switch in the chart style.
     private static func loadIndicators() -> [IndicatorConfig] {
-        if let saved = loadJSON([IndicatorConfig].self, "indicators") { return saved }
+        if let saved = loadJSON([IndicatorConfig].self, "indicators") { return IndicatorConfig.merged(saved) }
         let style = loadJSON(ChartStyle.self, "chartStyle")
         return [IndicatorConfig(kind: .volume, visible: style?.showVolume ?? true)]
     }
@@ -1480,25 +1480,42 @@ final class AppState: ObservableObject {
 
     // MARK: Indicators
 
+    /// A moving-average line: one EMA (SMA) indicator holds all its lengths.
     func addIndicator(_ kind: IndicatorKind, length: Int) {
-        var c = IndicatorConfig(kind: kind, length: length)
-        let colors = ["#E5B84C", "#5AA2FF", "#FF8A65", "#81C784", "#F06292", "#C17CFF"]
-        c.color = colors[indicators.filter { $0.kind == .ema || $0.kind == .sma }.count % colors.count]
-        indicators.append(c)
         legendCollapsed = false
+        if let i = indicators.firstIndex(where: { $0.kind == kind }) {
+            var lines = indicators[i].allLines
+            guard !lines.contains(where: { $0.length == length }) else { indicators[i].visible = true; return }
+            let used = Set(lines.map(\.color))
+            lines.append(IndicatorLine(length: length, color: IndicatorLine.palette.first { !used.contains($0) } ?? IndicatorLine.palette[lines.count % IndicatorLine.palette.count]))
+            indicators[i].lines = lines.sorted { $0.length < $1.length }
+            indicators[i].visible = true
+            return
+        }
+        var c = IndicatorConfig(kind: kind, length: length)
+        c.color = kind == .sma ? IndicatorLine.palette[1] : IndicatorLine.palette[0]
+        c.lines = [IndicatorLine(length: length, color: c.color)]
+        indicators.append(c)
     }
 
+    func removeIndicatorLine(_ kind: IndicatorKind, length: Int) {
+        guard let i = indicators.firstIndex(where: { $0.kind == kind }) else { return }
+        let lines = indicators[i].allLines.filter { $0.length != length }
+        if lines.isEmpty { indicators.remove(at: i) } else { indicators[i].lines = lines }
+    }
+
+    func hasIndicatorLine(_ kind: IndicatorKind, length: Int) -> Bool {
+        indicators.contains { $0.kind == kind && $0.allLines.contains { $0.length == length } }
+    }
+
+    /// Every indicator exists once; choosing it again shows it.
     func addIndicator(_ kind: IndicatorKind) {
-        var c = IndicatorConfig(kind: kind)
-        // A second EMA/SMA gets a longer length and another color, so 50 + 200 is two clicks.
-        let same = indicators.filter { $0.kind == kind }
-        if !same.isEmpty && (kind == .ema || kind == .sma) {
-            c.length = same.contains { $0.length == 200 } ? 100 : 200
-            c.color = ["#5AA2FF", "#FF8A65", "#81C784", "#F06292"][same.count % 4]
-        }
-        if kind == .volume, let i = indicators.firstIndex(where: { $0.kind == .volume }) { indicators[i].visible = true; return }
-        indicators.append(c)
         legendCollapsed = false
+        if let i = indicators.firstIndex(where: { $0.kind == kind }) { indicators[i].visible = true; return }
+        var c = IndicatorConfig(kind: kind)
+        if kind.hasLines { c.lines = [IndicatorLine(length: c.length, color: c.color)] }
+        if kind == .smc { c.smc = SMCOptions() }
+        indicators.append(c)
     }
 
     func toggleIndicator(_ id: UUID) {

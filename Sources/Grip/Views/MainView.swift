@@ -380,18 +380,21 @@ struct ChartHeader: View {
                     state.toggleTool(.measure)
                 }
                 Menu {
-                    Section(T("Gemiddelden")) {
+                    // One EMA and one SMA indicator; the lengths are its lines (more in its settings, ⚙ on the chip).
+                    Menu("EMA") {
                         ForEach([9, 21, 50, 100, 200], id: \.self) { n in
-                            Button("EMA \(n)") { state.addIndicator(.ema, length: n) }
-                                .disabled(state.indicators.contains { $0.kind == .ema && $0.length == n })
+                            Toggle("\(n)", isOn: Binding(get: { state.hasIndicatorLine(.ema, length: n) },
+                                                          set: { $0 ? state.addIndicator(.ema, length: n) : state.removeIndicatorLine(.ema, length: n) }))
                         }
-                        ForEach([20, 50, 200], id: \.self) { n in
-                            Button("SMA \(n)") { state.addIndicator(.sma, length: n) }
-                                .disabled(state.indicators.contains { $0.kind == .sma && $0.length == n })
+                    }
+                    Menu("SMA") {
+                        ForEach([20, 50, 100, 200], id: \.self) { n in
+                            Toggle("\(n)", isOn: Binding(get: { state.hasIndicatorLine(.sma, length: n) },
+                                                          set: { $0 ? state.addIndicator(.sma, length: n) : state.removeIndicatorLine(.sma, length: n) }))
                         }
                     }
                     Section {
-                        ForEach([IndicatorKind.vwap, .bollinger, .rsi, .volume], id: \.self) { k in
+                        ForEach([IndicatorKind.vwap, .bollinger, .rsi, .smc, .volume], id: \.self) { k in
                             Button(T(k.title)) { state.addIndicator(k) }
                                 .disabled(k == .volume && state.indicators.contains { $0.kind == .volume && $0.visible })
                         }

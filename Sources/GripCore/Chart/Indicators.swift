@@ -2,14 +2,14 @@ import Foundation
 
 /// Indicators Grip can draw. Overlays sit on the price, panes get their own strip under the chart.
 public enum IndicatorKind: String, Codable, CaseIterable, Sendable {
-    case volume, ema, sma, vwap, bollinger, rsi
+    case volume, ema, sma, vwap, bollinger, rsi, smc
 
     public enum Placement: Sendable { case volume, overlay, pane }
 
     public var placement: Placement {
         switch self {
         case .volume: return .volume
-        case .ema, .sma, .vwap, .bollinger: return .overlay
+        case .ema, .sma, .vwap, .bollinger, .smc: return .overlay
         case .rsi: return .pane
         }
     }
@@ -22,10 +22,13 @@ public enum IndicatorKind: String, Codable, CaseIterable, Sendable {
         case .vwap: return "VWAP (volume-gewogen, per dag)"
         case .bollinger: return "Bollinger Bands"
         case .rsi: return "RSI"
+        case .smc: return "Smart money concepts"
         }
     }
 
-    public var hasLength: Bool { self != .volume && self != .vwap }
+    public var hasLength: Bool { self != .volume && self != .vwap && self != .smc }
+    /// One indicator of this kind draws several lines, each with its own length and color.
+    public var hasLines: Bool { self == .ema || self == .sma }
 
     public var defaultLength: Int {
         switch self {
@@ -33,7 +36,7 @@ public enum IndicatorKind: String, Codable, CaseIterable, Sendable {
         case .sma: return 20
         case .bollinger: return 20
         case .rsi: return 14
-        case .volume, .vwap: return 0
+        case .volume, .vwap, .smc: return 0
         }
     }
 
@@ -45,8 +48,17 @@ public enum IndicatorKind: String, Codable, CaseIterable, Sendable {
         case .vwap: return "#C17CFF"
         case .bollinger: return "#4FC3F7"
         case .rsi: return "#B39DDB"
+        case .smc: return "#5AA2FF"
         }
     }
+}
+
+/// One line of a moving-average indicator.
+public struct IndicatorLine: Codable, Equatable, Sendable {
+    public var length: Int
+    public var color: String
+    public init(length: Int, color: String) { self.length = length; self.color = color }
+    public static let palette = ["#E5B84C", "#5AA2FF", "#FF8A65", "#81C784", "#F06292", "#C17CFF"]
 }
 
 public struct IndicatorConfig: Codable, Equatable, Identifiable, Sendable {
@@ -58,6 +70,31 @@ public struct IndicatorConfig: Codable, Equatable, Identifiable, Sendable {
     public var visible: Bool
     /// Pane indicators: folded to a thin strip with only the name.
     public var collapsed: Bool
+    /// EMA / SMA: the lines of this one indicator (nil in older saved settings: one line from `length` and `color`).
+    public var lines: [IndicatorLine]?
+    /// Smart money concepts: which parts are drawn.
+    public var smc: SMCOptions?
+
+    public var allLines: [IndicatorLine] { lines ?? [IndicatorLine(length: length, color: color)] }
+
+    /// Older settings had one indicator per EMA or SMA length: fold those into one indicator per kind.
+    public static func merged(_ list: [IndicatorConfig]) -> [IndicatorConfig] {
+        var out: [IndicatorConfig] = []
+        for c in list {
+            guard c.kind.hasLines else { out.append(c); continue }
+            if let i = out.firstIndex(where: { $0.kind == c.kind }) {
+                for l in c.allLines where !out[i].allLines.contains(where: { $0.length == l.length }) {
+                    out[i].lines = out[i].allLines + [l]
+                }
+                out[i].visible = out[i].visible || c.visible
+            } else {
+                var first = c
+                first.lines = c.allLines
+                out.append(first)
+            }
+        }
+        return out
+    }
 
     public init(id: UUID = UUID(), kind: IndicatorKind, length: Int? = nil, color: String? = nil, width: Double = 1.5, visible: Bool = true, collapsed: Bool = false) {
         self.id = id; self.kind = kind; self.length = length ?? kind.defaultLength; self.color = color ?? kind.defaultColor
@@ -69,8 +106,9 @@ public struct IndicatorConfig: Codable, Equatable, Identifiable, Sendable {
         switch kind {
         case .volume: return "Vol"
         case .vwap: return "VWAP"
-        case .ema: return "EMA \(length)"
-        case .sma: return "SMA \(length)"
+        case .ema: return "EMA " + allLines.map { "\($0.length)" }.joined(separator: " · ")
+        case .sma: return "SMA " + allLines.map { "\($0.length)" }.joined(separator: " · ")
+        case .smc: return "SMC"
         case .bollinger: return "BB \(length)"
         case .rsi: return "RSI \(length)"
         }

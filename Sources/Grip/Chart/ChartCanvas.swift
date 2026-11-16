@@ -174,6 +174,9 @@ final class ChartCanvas: NSView {
     fileprivate var hoveredChip: UUID?
     fileprivate var chipStartX: CGFloat = 0
     fileprivate var seriesCache: [UUID: (key: String, a: [Double?], b: [Double?], c: [Double?])] = [:]
+    /// One line of an EMA / SMA indicator, per indicator and length.
+    fileprivate var lineCache: [String: (key: String, v: [Double?])] = [:]
+    fileprivate var smcCache: [UUID: (key: String, result: SMCResult)] = [:]
     private var hover: Hover?
     private var commandDown = false
     private var pendingTrendStart: ChartPoint?
@@ -1788,9 +1791,101 @@ extension ChartCanvas {
             let bb = IndicatorMath.bollinger(closes, length: c.length)
             a = bb.mid; b = bb.upper; d = bb.lower
         case .volume: a = candles.map { Optional($0.volume) }
+        case .smc: break
         }
         seriesCache[c.id] = (key, a, b, d)
         return (a, b, d)
+    }
+
+    /// Values of one line of a moving-average indicator.
+    fileprivate func lineSeries(_ c: IndicatorConfig, length: Int) -> [Double?] {
+        let last = candles.last.map { "\($0.time)-\($0.close)" } ?? ""
+        let key = "\(candles.count)|\(candles.first?.time ?? 0)|\(last)"
+        let id = "\(c.id.uuidString)|\(c.kind.rawValue)|\(length)"
+        if let hit = lineCache[id], hit.key == key { return hit.v }
+        let closes = candles.map(\.close)
+        let v = c.kind == .sma ? IndicatorMath.sma(closes, length: length) : IndicatorMath.ema(closes, length: length)
+        if lineCache.count > 40 { lineCache.removeAll() }
+        lineCache[id] = (key, v)
+        return v
+    }
+
+    fileprivate func smcResult(_ c: IndicatorConfig) -> SMCResult {
+        let o = c.smc ?? SMCOptions()
+        let key = "\(o.swing)|\(candles.count)|\(candles.first?.time ?? 0)|\(candles.last?.time ?? 0)|\(candles.last?.close ?? 0)"
+        if let hit = smcCache[c.id], hit.key == key { return hit.result }
+        let r = SmartMoney.compute(candles, options: o)
+        smcCache[c.id] = (key, r)
+        return r
+    }
+
+    /// Smart money concepts: structure breaks, order blocks, fair value gaps, equal highs/lows, premium/discount.
+    /// Only zones that are still open are drawn, and only the most recent ones, so the chart stays readable.
+    fileprivate func drawSMC(_ c: IndicatorConfig) {
+        guard let vis = visibleIndices(), candles.count > 10 else { return }
+        let o = c.smc ?? SMCOptions()
+        let r = smcResult(c)
+        let font = NSFont.systemFont(ofSize: 9.5, weight: .semibold)
+        let bull = color(style.upBody), bear = color(style.downBody)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: plot).addClip()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+
+        func zone(_ z: SMCResult.Zone, fill: CGFloat, label: String) {
+            guard z.start <= vis.upperBound else { return }
+            let x0 = max(x(index: Double(z.start)), plot.minX - 2)
+            let top = min(y(z.top), y(z.bottom)), height = abs(y(z.bottom) - y(z.top))
+            let rect = NSRect(x: x0, y: top, width: max(plot.maxX - x0, 1), height: max(height, 1))
+            let col = z.isBullish ? bull : bear
+            col.withAlphaComponent(fill).setFill()
+            rect.fill()
+            col.withAlphaComponent(0.4).setStroke()
+            let edge = NSBezierPath(rect: rect.insetBy(dx: 0.5, dy: 0.5))
+            edge.lineWidth = 1
+            edge.stroke()
+            if rect.height > 11 { text(label, at: CGPoint(x: max(rect.minX, plot.minX) + 5, y: rect.midY), font: font, color: col.withAlphaComponent(0.95), align: .left) }
+        }
+
+        if o.premiumDiscount, let rg = r.range, rg.high.price > rg.low.price {
+            let x0 = max(x(index: Double(min(rg.high.index, rg.low.index))), plot.minX)
+            let yh = y(rg.high.price), yl = y(rg.low.price), ym = y((rg.high.price + rg.low.price) / 2)
+            bear.withAlphaComponent(0.05).setFill()
+            NSRect(x: x0, y: min(yh, ym), width: plot.maxX - x0, height: abs(ym - yh)).fill()
+            bull.withAlphaComponent(0.05).setFill()
+            NSRect(x: x0, y: min(yl, ym), width: plot.maxX - x0, height: abs(yl - ym)).fill()
+            Palette.muted.withAlphaComponent(0.6).setStroke()
+            hline(align(ym) + 0.5 / pixelRatio, from: x0, to: plot.maxX, width: 1, dash: [2, 3])
+            text("50%", at: CGPoint(x: x0 + 5, y: ym - 7 * (yh < yl ? 1 : -1)), font: font, color: Palette.muted, align: .left)
+            text("PREMIUM", at: CGPoint(x: x0 + 5, y: (yh + ym) / 2), font: font, color: bear.withAlphaComponent(0.7), align: .left)
+            text("DISCOUNT", at: CGPoint(x: x0 + 5, y: (yl + ym) / 2), font: font, color: bull.withAlphaComponent(0.7), align: .left)
+        }
+        if o.fairValueGaps {
+            for z in r.fairValueGaps.filter({ $0.end == nil }).suffix(8) { zone(z, fill: 0.10, label: "FVG") }
+        }
+        if o.orderBlocks {
+            for z in r.orderBlocks.filter({ $0.end == nil }).suffix(6) { zone(z, fill: 0.16, label: "OB") }
+        }
+        if o.liquidity {
+            for e in r.equals.suffix(10) where e.second >= vis.lowerBound && e.first <= vis.upperBound {
+                let yy = align(y(e.price)) + 0.5 / pixelRatio
+                (e.isHigh ? bear : bull).withAlphaComponent(0.8).setStroke()
+                hline(yy, from: x(index: Double(e.first)), to: x(index: Double(e.second)), width: 1, dash: [1, 3])
+                text(e.isHigh ? "EQH" : "EQL", at: CGPoint(x: (x(index: Double(e.first)) + x(index: Double(e.second))) / 2, y: yy + (e.isHigh == (y(1) < y(0)) ? -7 : 7)),
+                     font: font, color: (e.isHigh ? bear : bull).withAlphaComponent(0.9), align: .center)
+            }
+        }
+        if o.structure {
+            for b in r.breaks.suffix(14) where b.at >= vis.lowerBound && b.from <= vis.upperBound {
+                let yy = align(y(b.price)) + 0.5 / pixelRatio
+                let col = b.isBullish ? bull : bear
+                col.withAlphaComponent(0.85).setStroke()
+                hline(yy, from: x(index: Double(b.from)), to: x(index: Double(b.at)), width: 1, dash: b.isChange ? nil : [4, 3])
+                // Above the line for a break upward, below it for a break downward.
+                let up = (y(1) < y(0)) == b.isBullish
+                text(b.isChange ? "CHoCH" : "BOS", at: CGPoint(x: (x(index: Double(b.from)) + x(index: Double(b.at))) / 2, y: yy + (up ? -7 : 7)),
+                     font: font, color: col, align: .center)
+            }
+        }
     }
 
     fileprivate func strokeSeries(_ v: [Double?], color col: NSColor, width: CGFloat, dash: [CGFloat]? = nil, yMap: (Double) -> CGFloat) {
@@ -1833,6 +1928,10 @@ extension ChartCanvas {
                 strokeSeries(s.b, color: col, width: w) { self.y($0) }
                 strokeSeries(s.c, color: col, width: w) { self.y($0) }
                 strokeSeries(s.a, color: col.withAlphaComponent(0.7), width: max(w - 0.5, 0.5), dash: [4, 3]) { self.y($0) }
+            } else if c.kind == .smc {
+                drawSMC(c)
+            } else if c.kind.hasLines {
+                for l in c.allLines { strokeSeries(lineSeries(c, length: l.length), color: color(l.color), width: w) { self.y($0) } }
             } else {
                 strokeSeries(s.a, color: col, width: w) { self.y($0) }
             }
@@ -1872,7 +1971,11 @@ extension ChartCanvas {
     fileprivate func valueText(_ c: IndicatorConfig, _ i: Int) -> String {
         let s = series(c)
         func at(_ v: [Double?]) -> Double? { i < v.count ? v[i] : nil }
+        if c.kind.hasLines {
+            return c.allLines.map { at(lineSeries(c, length: $0.length)).map { Fmt.price($0) } ?? "–" }.joined(separator: " · ")
+        }
         switch c.kind {
+        case .smc: return ""
         case .volume: return at(s.a).map { compact($0) } ?? "–"
         case .rsi: return at(s.a).map { Fmt.number($0, decimals: 1) } ?? "–"
         case .bollinger:
@@ -1886,11 +1989,15 @@ extension ChartCanvas {
     fileprivate func drawIndicatorAxisTags() {
         guard let i = focusIndex else { return }
         for c in indicators where c.visible && (c.kind == .ema || c.kind == .sma || c.kind == .vwap) {
-            let s = series(c)
-            guard i < s.a.count, let v = s.a[i] else { continue }
-            let yy = y(v)
-            guard yy > plot.minY + 8, yy < plot.maxY - 8 else { continue }
-            axisTag(v, at: yy, bg: color(c.color), fg: Palette.bg)
+            // One tag per line of the indicator.
+            let lines: [(v: [Double?], color: String)] = c.kind.hasLines
+                ? c.allLines.map { (lineSeries(c, length: $0.length), $0.color) } : [(series(c).a, c.color)]
+            for l in lines {
+                guard i < l.v.count, let v = l.v[i] else { continue }
+                let yy = y(v)
+                guard yy > plot.minY + 8, yy < plot.maxY - 8 else { continue }
+                axisTag(v, at: yy, bg: color(l.color), fg: Palette.bg)
+            }
         }
     }
 
@@ -1928,7 +2035,7 @@ extension ChartCanvas {
             return
         }
         for c in indicators {
-            let col = color(c.color)
+            let col = color(c.kind.hasLines ? (c.allLines.first?.color ?? c.color) : c.color)
             let hovered = hoveredChip == c.id
             let nameW = width(c.shortName, font)
             let value = hovered ? valueText(c, i) : ""
