@@ -1492,7 +1492,10 @@ final class AppState: ObservableObject {
     func resetChart() { chartResetToken += 1 }
 
     func stepTimeframe(_ d: Int) {
-        if let tf = d > 0 ? timeframe.next : timeframe.previous { timeframe = tf }
+        // ⌘[ and ⌘] walk through the timeframes in the header (your favourites), not all thirteen.
+        let shown = shownTimeframes
+        guard let i = shown.firstIndex(of: timeframe), shown.indices.contains(i + d) else { return }
+        timeframe = shown[i + d]
     }
 
     /// Changes the selected line from the toolbar; the new look becomes the default for new lines.

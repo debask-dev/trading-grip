@@ -78,9 +78,12 @@ final class ViewportTests: XCTestCase {
         XCTAssertEqual(Timeframe.parse("d"), .d1)
         XCTAssertEqual(Timeframe.parse("1w"), .w1)
         XCTAssertNil(Timeframe.parse("7"))
-        XCTAssertEqual(Timeframe.m15.next, .h1)
+        XCTAssertEqual(Timeframe.parse("30"), .m30)
+        XCTAssertEqual(Timeframe.parse("12h"), .h12)
+        XCTAssertEqual(Timeframe.parse("3d"), .d3)
+        XCTAssertEqual(Timeframe.m15.next, .m30)
         XCTAssertNil(Timeframe.w1.next)
-        XCTAssertEqual(Timeframe.m5.previous, .m1)
+        XCTAssertEqual(Timeframe.m5.previous, .m3)
     }
 
     func testKineticFling() {
