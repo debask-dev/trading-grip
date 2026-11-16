@@ -840,7 +840,7 @@ final class AppState: ObservableObject {
                 refreshHistorySoon()
             }
             for o in state.openOrders where orderKinds[o.oid] == nil {
-                orderKinds[o.oid] = o.isTrigger ? (o.tpsl == .tp ? .takeProfit : .stopLoss) : (o.reduceOnly ? .takeProfit : .limit)
+                orderKinds[o.oid] = o.isStopEntry ? .limit : (o.isTrigger ? (o.tpsl == .tp ? .takeProfit : .stopLoss) : (o.reduceOnly ? .takeProfit : .limit))
             }
             previousOrders = state.openOrders
             if account != state { account = state }
@@ -1048,7 +1048,7 @@ final class AppState: ObservableObject {
         let req = OrderRequest(asset: a, isBuy: o.isBuy, size: size, limitPx: px, reduceOnly: o.reduceOnly, kind: kind)
         do {
             try await execModify(oid: oid, req)
-            if o.isTrigger && o.tpsl == .sl {
+            if o.isStop {
                 managed[o.coin]?.stop = px
                 try await moveOtherStops(coin: o.coin, asset: a, to: px, except: oid)
             }
@@ -1058,14 +1058,18 @@ final class AppState: ObservableObject {
             toast(error.localizedDescription, .error)
         }
         await refreshAccount()
-        if !o.reduceOnly || (o.isTrigger && o.tpsl == .sl) { await resizeRestingSetup(coin: o.coin) }
+        if !o.reduceOnly || (o.isStop) { await resizeRestingSetup(coin: o.coin) }
     }
 
     /// Why an open order cannot go to this price (nil = it can): a stop or take-profit past the current price would go
     /// off at once; a stop past its own entry, or a take-profit before it, is refused by the exchange.
     func moveProblem(_ o: OpenOrder, to px: Double) -> String? {
-        guard o.isTrigger || o.reduceOnly else { return nil }
-        let isStop = o.isTrigger && o.tpsl == .sl
+        if o.isStopEntry, let p = livePrice(o.coin), p > 0, o.isBuy ? px <= p : px >= p {
+            // A stop-entry waits for the price to come to it; on this side it would buy or sell straight away.
+            return T("Een stop-entry aan die kant van de koers gaat direct af. Hij staat terug.")
+        }
+        guard o.reduceOnly else { return nil }
+        let isStop = o.isStop
         let long = !o.isBuy                      // side of the trade this order closes
         let pos = account.position(for: o.coin)
         if pos != nil, let p = livePrice(o.coin), p > 0 {
@@ -1099,7 +1103,7 @@ final class AppState: ObservableObject {
     }
 
     /// All stop-loss orders of a coin. A ladder has one per entry until every entry is filled.
-    func stopOrders(_ c: String) -> [OpenOrder] { account.orders(for: c).filter { $0.isTrigger && $0.tpsl == .sl && $0.reduceOnly } }
+    func stopOrders(_ c: String) -> [OpenOrder] { account.orders(for: c).filter { $0.isStop } }
 
     /// Moves the other stops of the coin to the same price, so the trade keeps one stop level.
     func moveOtherStops(coin c: String, asset a: AssetInfo, to px: Double, except oid: Int64) async throws {
@@ -1114,7 +1118,7 @@ final class AppState: ObservableObject {
               let a = assets.first(where: { $0.name == o.coin }) else { return }
         do {
             try await execCancel(a, oid: oid)
-            if o.isTrigger && o.tpsl == .sl { managed[o.coin]?.stop = nil }   // removed on purpose: don't put it back
+            if o.isStop { managed[o.coin]?.stop = nil }   // removed on purpose: don't put it back
             toast(T("\(orderName(o)) geannuleerd"), .info)
         } catch {
             toast(error.localizedDescription, .error)
@@ -1201,15 +1205,15 @@ final class AppState: ObservableObject {
     /// Result of a stop or take-profit for the open position or, without one, for the resting entry orders
     /// it belongs to (fees included). Nil when there is nothing to measure against.
     func setupOutcome(_ o: OpenOrder, at px: Double? = nil) -> Double? {
-        guard o.isTrigger || o.reduceOnly else { return nil }
+        guard o.reduceOnly else { return nil }
         let px = px ?? (pendingOrderPrices[o.oid] ?? o.displayPx)
         let exitFee = o.isTrigger && o.tpsl != .tp ? feeRates.taker : feeRates.maker
         if let pos = position {
-            if o.isTrigger && o.tpsl == .sl { return tradeResult(pos, at: px) }
+            if o.isStop { return tradeResult(pos, at: px) }
             let qty = o.size > 0 ? min(o.size, abs(pos.size)) : abs(pos.size)
             return (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1) - qty * px * exitFee
         }
-        let entries = coinOrders.filter { !$0.isTrigger && !$0.reduceOnly && $0.isBuy != o.isBuy }
+        let entries = coinOrders.filter { $0.isEntry && $0.isBuy != o.isBuy }
         let total = entries.reduce(0) { $0 + $1.size }
         guard total > 0 else { return nil }
         let avg = entries.reduce(0) { $0 + $1.size * $1.displayPx } / total
@@ -1219,6 +1223,7 @@ final class AppState: ObservableObject {
     }
 
     func orderName(_ o: OpenOrder) -> String {
+        if o.isStopEntry { return T("Stop-entry") }
         if o.isTrigger { return o.tpsl == .tp ? T("Take-profit") : T("Stop-loss") }
         // Reduce-only limits are take-profits (placed by Grip, or "Verkleinen op prijs").
         if o.reduceOnly { return T("Take-profit") }
@@ -1266,14 +1271,15 @@ final class AppState: ObservableObject {
         }
         // While adding, the ticket's stop line stands for the position's stop.
         let hideStop = t.map { $0.useStopLoss && !$0.reduceOnly && position != nil } ?? false
-        for o in coinOrders where !(hideStop && o.isTrigger && o.tpsl == .sl) {
-            if draft != nil && o.reduceOnly && (!o.isTrigger || o.tpsl == .tp) { continue }
+        for o in coinOrders where !(hideStop && o.isStop) {
+            if draft != nil && o.isTakeProfit { continue }
             let px = orderEdit?.oid == o.oid ? orderEdit!.price : (pendingOrderPrices[o.oid] ?? o.displayPx)
-            let isStop = o.isTrigger && o.tpsl == .sl
+            let isStop = o.isStop
             // A stop that leaves a profit is green: this trade cannot lose any more.
             let stopSafe = isStop && (cm?.meter.low ?? -1) >= 0
-            let color: NSColor = o.isTrigger ? (o.tpsl == .tp || stopSafe ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.green : Palette.blue)
-            lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: true, draggable: true, closable: true, snapsToBreakEven: isStop))
+            let color: NSColor = o.isStopEntry ? Palette.blue : (o.isTrigger ? (o.tpsl == .tp || stopSafe ? Palette.green : Palette.red) : (o.reduceOnly ? Palette.green : Palette.blue))
+            // On the exchange: a solid line. What is still in the form is dashed.
+            lines.append(ChartLine(id: .order(o.oid), price: px, color: color, dashed: false, draggable: true, closable: true, snapsToBreakEven: isStop))
         }
         if let pos = position {
             // Position line and bar coloured by the result of the whole trade.
@@ -1307,8 +1313,45 @@ final class AppState: ObservableObject {
         return "TP\(n > 1 ? "\(i + 1)" : "") " + shareText(fraction)
     }
 
-    /// Live label for a chart line at a (possibly dragged) price.
+    /// Side of the trade a placed order belongs to: an entry by its own side, a stop or take-profit by the side it closes.
+    private func setupSide(_ o: OpenOrder) -> Bool { o.reduceOnly ? !o.isBuy : o.isBuy }
+
+    /// Letter in front of a label when the chart shows more than one setup (a long and a short, or a placed one and
+    /// the one in the form), so you see what belongs together. `concept` = the order in the form.
+    private func setupLetter(long: Bool?, concept: Bool) -> String {
+        var sides: [Bool] = []
+        if let pos = position { sides.append(pos.isLong) }
+        for o in coinOrders where !sides.contains(setupSide(o)) { sides.append(setupSide(o)) }
+        let draft = ticket.map { !$0.linesHidden } ?? false
+        guard sides.count + (draft ? 1 : 0) > 1 else { return "" }
+        let letters = ["Ⓐ", "Ⓑ", "Ⓒ"]
+        if concept { return letters[min(sides.count, 2)] + " " }
+        guard let long, let i = sides.firstIndex(of: long) else { return "" }
+        return letters[min(i, 2)] + " "
+    }
+
+    /// Live label for a chart line: which setup it belongs to, what it means, and whether it is on the exchange yet.
     func lineLabel(_ id: LineID, at px: Double) -> String {
+        let text = plainLineLabel(id, at: px)
+        guard !text.isEmpty else { return text }
+        switch id {
+        case .ticketEntry, .ticketSL, .ticketTP:
+            return setupLetter(long: nil, concept: true) + text + " · " + T("concept")
+        case .ticketLiq:
+            return setupLetter(long: nil, concept: true) + text
+        case .order(let oid):
+            guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return text }
+            return setupLetter(long: setupSide(o), concept: false) + text
+        case .pendingTP:
+            return setupLetter(long: tradeSide, concept: false) + text + " · " + T("na fill")
+        case .position, .plan, .averageTP:
+            return setupLetter(long: tradeSide, concept: false) + text
+        case .draftTP, .breakEven, .liquidation:
+            return text
+        }
+    }
+
+    private func plainLineLabel(_ id: LineID, at px: Double) -> String {
         let f = fmt
         let eq = max(account.accountValue, 1)
         switch id {
@@ -1318,7 +1361,7 @@ final class AppState: ObservableObject {
             if t.reduceOnly { return T("VERKLEIN \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(f.signedUsd(pl.reducePnl ?? 0))") }
             let side = t.isLong ? T("LONG") : T("SHORT")
             if t.entries.count == 1 {
-                return T("\(pl.isAdd ? "BIJ" : "LIMIT") \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×")
+                return T("\(pl.isAdd ? "BIJ" : (ticketIsStopEntry(t, i) ? "STOP" : "LIMIT")) \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×")
             }
             return T("E\(i + 1) · \(Int(t.entries[i].pct))%  \(f.size(sz, coin: coin, decimals: szDecimals))")
         case .ticketSL:
@@ -1353,7 +1396,7 @@ final class AppState: ObservableObject {
         case .order(let oid):
             guard let o = account.openOrders.first(where: { $0.oid == oid }) else { return "" }
             // Stop: what the whole trade ends with there (waiting entries filled on the way).
-            if o.isTrigger && o.tpsl == .sl, let cm = meter(for: coin, stop: px), let low = cm.meter.low {
+            if o.isStop, let cm = meter(for: coin, stop: px), let low = cm.meter.low {
                 if let be = breakEven, abs(px - be) < priceTick / 2 { return T("SL op BE") }
                 return "SL " + f.signedUsd(low)
             }
@@ -1364,7 +1407,7 @@ final class AppState: ObservableObject {
                 return tpLabel(index: i, count: tps.count, fraction: base > 0 && o.size > 0 ? min(o.size / base, 1) : 1, price: px)
             }
             // Entries of a ladder: number and share.
-            if !o.isTrigger && !o.reduceOnly, let side = tradeSide, o.isBuy == side {
+            if o.isEntry, let side = tradeSide, o.isBuy == side {
                 let entries = TPEditor.restingEntries(coinOrders, isLong: side).sorted { side ? $0.limitPx > $1.limitPx : $0.limitPx < $1.limitPx }
                 if entries.count > 1, let i = entries.firstIndex(where: { $0.oid == oid }) {
                     let total = entries.reduce(0) { $0 + $1.size } + abs(position?.size ?? 0)
@@ -1372,24 +1415,24 @@ final class AppState: ObservableObject {
                     return "E\(filled + i + 1) " + shareText(o.size / max(total, 1e-12))
                 }
             }
-            if let pos = position, o.isTrigger && o.tpsl == .sl {
+            if let pos = position, o.isStop {
                 // Stop: what the whole trade ends with if it is hit (realized parts, fees and funding included).
                 let net = tradeResult(pos, at: px)
                 return T("SL hele trade  \(f.signedUsd(net))  (\(Fmt.percent(net / eq, decimals: 2)))")
             }
-            if let pos = position, o.reduceOnly || o.isTrigger {
+            if let pos = position, o.reduceOnly {
                 let qty = o.size > 0 ? min(o.size, abs(pos.size)) : abs(pos.size)
                 let pnl = (px - pos.entryPx) * qty * (pos.isLong ? 1 : -1)
                 let name = o.isTrigger ? (o.tpsl == .tp ? "TP" : "SL") : T("SLUIT \(Int((qty / abs(pos.size) * 100).rounded()))%")
                 return "\(name)  \(f.signedUsd(pnl))  (\(Fmt.percent(pnl / eq, decimals: 1)))"
             }
-            if o.isTrigger || o.reduceOnly {
+            if o.reduceOnly {
                 // Stop or TP waiting for an unfilled entry: show what it means for the coming trade.
                 let name = o.isTrigger ? (o.tpsl == .tp ? "TP" : "SL") : T("SLUIT")
                 guard let pnl = setupOutcome(o, at: px) else { return "\(name)  \(Fmt.price(px))" }
                 return "\(name)  \(f.signedUsd(pnl))  (\(Fmt.percent(pnl / eq, decimals: 2)))"
             }
-            return T("LIMIT \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))")
+            return T("\(o.isStopEntry ? "STOP" : "LIMIT") \(o.isBuy ? "LONG" : "SHORT")  \(f.size(o.size, coin: coin, decimals: szDecimals))")
         case .position:
             guard let pos = position else { return "" }
             if let cm = chartMeter { return meterLabel(cm, plan: false) }

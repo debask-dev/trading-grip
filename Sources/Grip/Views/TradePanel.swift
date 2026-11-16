@@ -438,6 +438,10 @@ struct TicketCard: View {
             if hold {
                 Text(T("Market zonder stop: houd de knop even ingedrukt.")).font(.system(size: 10.5)).foregroundStyle(Theme.orange)
             }
+            if let t, t.entries.indices.contains(where: { state.ticketIsStopEntry(t, $0) }) {
+                Text(T("Entry aan de andere kant van de koers: dat wordt een stop-entry. Hij wacht tot de koers erdoorheen gaat en stapt dan market in."))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.accent).fixedSize(horizontal: false, vertical: true)
+            }
             if t?.replacesSetup == true {
                 Text(T("Je wachtende orders worden geannuleerd en opnieuw geplaatst met deze waarden."))
                     .font(.system(size: 10.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
@@ -744,6 +748,7 @@ struct TicketCard: View {
         if t.reduceOnly { return t.isMarket && n == 1 ? T("Verklein (market)") : T("Verklein") }
         if adding { return t.isMarket ? T("Koop bij (market)") : (n > 1 ? T("Plaats \(n) bijkoop-orders") : T("Koop bij")) }
         if n > 1 { return T("Plaats \(n) entries") }
+        if state.ticketIsStopEntry(t, 0) { return T("Plaats stop \(side)") }
         return t.isMarket ? T("Market \(side)") : T("Plaats limit \(side)")
     }
 }
@@ -1111,7 +1116,7 @@ struct OrdersCard: View {
                 if let draft { TPEditorView(draft: draft) }
                 ForEach(orders) { o in
                     let editing = state.orderEdit?.oid == o.oid
-                    if draft != nil && o.reduceOnly && (!o.isTrigger || o.tpsl == .tp) {
+                    if draft != nil && o.isTakeProfit {
                         EmptyView()
                     } else {
                         Button {
@@ -1120,7 +1125,7 @@ struct OrdersCard: View {
                             HStack(spacing: 8) {
                                 Circle().fill(color(o)).frame(width: 7, height: 7)
                                 Text(state.orderName(o)).font(.system(size: 12))
-                                if o.reduceOnly && !(o.isTrigger && o.tpsl == .sl), let share = share(o) {
+                                if o.reduceOnly && !(o.isStop), let share = share(o) {
                                     Text(share).mono(10.5).foregroundStyle(Theme.dim)
                                 }
                                 Spacer()
@@ -1162,6 +1167,7 @@ struct OrdersCard: View {
     }
 
     private func color(_ o: OpenOrder) -> Color {
+        if o.isStopEntry { return Theme.blue }
         if o.isTrigger { return o.tpsl == .tp ? Theme.green : Theme.red }
         return o.reduceOnly ? Theme.green : Theme.blue
     }
@@ -1260,7 +1266,7 @@ struct OrderEditView: View {
     private var priceDecimals: Int { max(0, -Int(floor(log10(state.priceTick) + 1e-9))) }
 
     var body: some View {
-        let isStop = order.isTrigger && order.tpsl == .sl
+        let isStop = order.isStop
         let base = state.orderBaseSize(order)
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -1316,6 +1322,7 @@ struct OrderEditView: View {
     }
 
     private var color: Color {
+        if order.isStopEntry { return Theme.blue }
         if order.isTrigger { return order.tpsl == .tp ? Theme.green : Theme.red }
         return order.reduceOnly ? Theme.orange : Theme.blue
     }

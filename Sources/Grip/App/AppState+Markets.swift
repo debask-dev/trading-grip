@@ -61,9 +61,9 @@ extension AppState {
         account.orders(for: c).compactMap { distance($0) }.min()
     }
 
-    func stopOrder(_ c: String) -> OpenOrder? { account.orders(for: c).first { $0.isTrigger && $0.tpsl == .sl } }
+    func stopOrder(_ c: String) -> OpenOrder? { account.orders(for: c).first { $0.isStop } }
 
-    func takeProfits(_ c: String) -> [OpenOrder] { account.orders(for: c).filter { $0.reduceOnly && (!$0.isTrigger || $0.tpsl == .tp) } }
+    func takeProfits(_ c: String) -> [OpenOrder] { account.orders(for: c).filter { $0.isTakeProfit } }
 
     func breakEven(for pos: Position) -> Double? {
         let o = analysis.open[pos.coin]

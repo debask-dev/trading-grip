@@ -126,7 +126,7 @@ public final class PaperExchange: Codable, @unchecked Sendable {
             guard let mark = marks[coin], mark > 0 else { throw HLError.exchange("Geen prijs voor \(coin).") }
             let oid = nextOid; nextOid += 1
             switch r.kind {
-            case .trigger(_, _, let tpsl): orderKinds[oid] = tpsl == .tp ? .takeProfit : .stopLoss
+            case .trigger(_, _, let tpsl): orderKinds[oid] = !r.reduceOnly ? .limit : (tpsl == .tp ? .takeProfit : .stopLoss)
             case .limit(let tif): orderKinds[oid] = tif == "Ioc" ? .market : (r.reduceOnly ? .takeProfit : .limit)
             }
             let size = HLFormat.roundSize(r.size, szDecimals: r.asset.szDecimals)
@@ -147,7 +147,7 @@ public final class PaperExchange: Codable, @unchecked Sendable {
             switch r.kind {
             case .trigger(let trig, let isMarket, let tpsl):
                 let isChild = grouping == "normalTpsl" && i > 0
-                orders.append(Order(oid: oid, coin: coin, isBuy: r.isBuy, px: r.limitPx, size: size, reduceOnly: true,
+                orders.append(Order(oid: oid, coin: coin, isBuy: r.isBuy, px: r.limitPx, size: size, reduceOnly: r.reduceOnly,
                                     triggerPx: trig, tpsl: tpsl, isMarketTrigger: isMarket, isPositionTpsl: grouping == "positionTpsl",
                                     parentOid: isChild && !parentFilled ? parent : nil, time: time))
                 statuses.append(.resting(oid: oid))

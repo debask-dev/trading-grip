@@ -131,6 +131,15 @@ public struct OpenOrder: Equatable, Identifiable, Sendable {
     public var timestamp: Int64
     public var id: Int64 { oid }
 
+    /// Opens or adds to a position: a limit, or a stop-entry that waits for the price to break through.
+    public var isEntry: Bool { !reduceOnly }
+    /// An entry that triggers when the price passes it (breakout), instead of resting as a limit.
+    public var isStopEntry: Bool { isTrigger && !reduceOnly }
+    /// A stop-loss: closes (part of) the position at a loss-limiting price.
+    public var isStop: Bool { isTrigger && tpsl == .sl && reduceOnly }
+    /// A take-profit: reduce-only limit, or a take-profit trigger.
+    public var isTakeProfit: Bool { reduceOnly && (!isTrigger || tpsl == .tp) }
+
     /// The price at which this order shows up in the chart.
     public var displayPx: Double { isTrigger ? (triggerPx ?? limitPx) : limitPx }
 

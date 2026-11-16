@@ -10,7 +10,7 @@ extension AppState {
     /// After a take-profit: move the stop-loss to break-even (when chosen in the ticket).
     func moveStopToBreakEven(coin c: String, force: Bool = false) async {
         guard force || breakEvenAfterTP.contains(c), let pos = account.position(for: c),
-              let sl = account.openOrders.first(where: { $0.coin == c && $0.isTrigger && $0.tpsl == .sl }),
+              let sl = account.openOrders.first(where: { $0.coin == c && $0.isStop }),
               let a = assets.first(where: { $0.name == c }) else { return }
         let o = analysis.open[c]
         guard let be = PositionMath.breakEven(entry: pos.entryPx, size: pos.size, feesPaid: o?.feesPaid ?? 0, realized: force ? (o?.realized ?? 0) : 0,
@@ -70,6 +70,8 @@ extension AppState {
             items.append((T("Bijkopen hier (\(pos.isLong ? "long" : "short"))"), { [weak self] in self?.newTicket(long: pos.isLong, entry: px) }))
         } else if p > 0 && ticket == nil {
             items.append((px < p ? T("Limit long hier") : T("Limit short hier"), { [weak self] in self?.newTicket(long: px < p, entry: px) }))
+            // The other way round: enter when the price breaks through this level.
+            items.append((px > p ? T("Stop long hier (breakout)") : T("Stop short hier (breakout)"), { [weak self] in self?.newTicket(long: px > p, entry: px) }))
         }
         if position != nil {
             items.append(("-", {}))

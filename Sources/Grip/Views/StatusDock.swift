@@ -350,7 +350,7 @@ struct OrderRow: View {
         let d = state.distance(o)
         HStack(spacing: 10) {
             Text(o.coin).fontWeight(.semibold).frame(width: 60, alignment: .leading)
-            Text(state.orderName(o) + (o.isTrigger || o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
+            Text(state.orderName(o) + (o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
                 .foregroundStyle(color(o)).frame(width: 130, alignment: .leading)
             Group {
                 if editing {
@@ -417,6 +417,7 @@ struct OrderRow: View {
     }
 
     private func color(_ o: OpenOrder) -> Color {
+        if o.isStopEntry { return Theme.blue }
         if o.isTrigger { return o.tpsl == .tp ? Theme.green : Theme.red }
         return o.reduceOnly ? Theme.orange : Theme.blue
     }

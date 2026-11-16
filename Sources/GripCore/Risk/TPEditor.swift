@@ -11,12 +11,12 @@ public enum TPEditor {
 
     /// Orders that count as take-profits: reduce-only limits and TP triggers.
     public static func takeProfitOrders(_ orders: [OpenOrder], isLong: Bool) -> [OpenOrder] {
-        orders.filter { $0.reduceOnly && (!$0.isTrigger || $0.tpsl == .tp) && $0.isBuy != isLong }
+        orders.filter { $0.isTakeProfit && $0.isBuy != isLong }
     }
 
     /// Entries that still wait to fill, on the side of the trade.
     public static func restingEntries(_ orders: [OpenOrder], isLong: Bool) -> [OpenOrder] {
-        orders.filter { !$0.isTrigger && !$0.reduceOnly && $0.isBuy == isLong }
+        orders.filter { $0.isEntry && $0.isBuy == isLong }
     }
 
     /// Size the shares refer to: the position, or before the fill the resting entries together.
@@ -50,7 +50,7 @@ public enum TPEditor {
         let size = positionSize(isLong: isLong, position)
         let wanted = sorted(levels.filter { $0.fraction > 1e-9 && $0.price > 0 }, isLong: isLong)
         var next = m ?? ManagedTrade(isLong: isLong,
-                                     stop: orders.first { $0.isTrigger && $0.tpsl == .sl }?.displayPx,
+                                     stop: orders.first { $0.isStop }?.displayPx,
                                      entryOids: restingEntries(orders, isLong: isLong).map(\.oid),
                                      lastSize: size)
         next.isLong = isLong

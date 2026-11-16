@@ -21,7 +21,7 @@ extension AppState {
     /// Side of the trade on a coin: the position, else a waiting entry, else what Grip keeps for it.
     func side(of c: String) -> Bool? {
         if let pos = account.position(for: c) { return pos.isLong }
-        if let e = account.orders(for: c).first(where: { !$0.isTrigger && !$0.reduceOnly }) { return e.isBuy }
+        if let e = account.orders(for: c).first(where: { $0.isEntry }) { return e.isBuy }
         return managed[c]?.isLong
     }
 
@@ -34,7 +34,7 @@ extension AppState {
         guard pos != nil || !resting.isEmpty else { return nil }
         let o = analysis.open[c]
         let locked = pos != nil ? (o?.realized ?? 0) - (o?.feesPaid ?? 0) + (o?.funding ?? 0) : 0
-        let stop = stopOverride ?? orders.first(where: { $0.isTrigger && $0.tpsl == .sl })?.displayPx ?? managed[c]?.stop
+        let stop = stopOverride ?? orders.first(where: { $0.isStop })?.displayPx ?? managed[c]?.stop
         let tps = tpOverride ?? TPEditor.current(managed[c], isLong: isLong, position: pos, orders: orders)
         let total = managed[c]?.entryCount ?? (resting.count + (pos != nil ? 1 : 0))
         let input = TradeMeter.Input(isLong: isLong, size: abs(pos?.size ?? 0), entry: pos?.entryPx ?? 0, locked: locked,
@@ -65,7 +65,7 @@ extension AppState {
         let side = cm.isLong ? T("LONG") : T("SHORT")
         let dots = m.entriesTotal > 1 ? " " + String(repeating: "●", count: min(m.entriesFilled, m.entriesTotal)) + String(repeating: "○", count: max(m.entriesTotal - m.entriesFilled, 0)) : ""
         if plan {
-            let size = account.orders(for: coin).filter { !$0.isTrigger && !$0.reduceOnly && $0.isBuy == cm.isLong }.reduce(0) { $0 + $1.size }
+            let size = account.orders(for: coin).filter { $0.isEntry && $0.isBuy == cm.isLong }.reduce(0) { $0 + $1.size }
             let risk = m.low.map { "  ·  " + T("risico \(fmt.signedUsd($0))") } ?? ""
             return T("PLAN \(side) \(fmt.size(size, coin: coin, decimals: szDecimals))") + dots + risk
         }

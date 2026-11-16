@@ -41,6 +41,14 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Een stop-entry aan die kant van de koers gaat direct af. Hij staat terug.	A stop entry on that side of the price goes off at once. It is back where it was.
+Stop-entry	Stop entry
+concept	draft
+na fill	after fill
+Stop long hier (breakout)	Stop long here (breakout)
+Stop short hier (breakout)	Stop short here (breakout)
+Plaats stop {}	Place stop {}
+Entry aan de andere kant van de koers: dat wordt een stop-entry. Hij wacht tot de koers erdoorheen gaat en stapt dan market in.	Entry on the far side of the price: this becomes a stop entry. It waits until the price breaks through and then enters at market.
 Smart money concepts	Smart money concepts
 Klik voor een andere kleur	Click for another colour
 + lijn	+ line

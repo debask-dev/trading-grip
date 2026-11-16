@@ -105,7 +105,7 @@ struct MenuBarView: View {
                         let d = state.distance(o)
                         HStack(spacing: 6) {
                             Circle().fill(color(o)).frame(width: 6, height: 6)
-                            Text(state.orderName(o) + (o.isTrigger || o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
+                            Text(state.orderName(o) + (o.reduceOnly ? "" : (o.isBuy ? T(" long") : T(" short"))))
                                 .font(.system(size: 11.5)).lineLimit(1)
                             Spacer(minLength: 4)
                             Text(Fmt.price(o.displayPx)).mono(11.5)
@@ -131,6 +131,7 @@ struct MenuBarView: View {
     }
 
     private func color(_ o: OpenOrder) -> Color {
+        if o.isStopEntry { return Theme.blue }
         if o.isTrigger { return o.tpsl == .tp ? Theme.green : Theme.red }
         return o.reduceOnly ? Theme.orange : Theme.blue
     }

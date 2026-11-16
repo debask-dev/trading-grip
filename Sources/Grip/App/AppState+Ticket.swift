@@ -41,6 +41,13 @@ extension AppState {
         }
     }
 
+    /// An entry on the far side of the price (a long above it, a short below it) cannot rest as a limit: it would
+    /// fill at once. It goes in as a stop-entry: it waits until the price breaks through and then enters at market.
+    func ticketIsStopEntry(_ t: Ticket, _ i: Int) -> Bool {
+        guard !t.reduceOnly, t.entries.indices.contains(i), !(t.isMarket && i == 0), price > 0 else { return false }
+        return t.isLong ? t.entries[i].price > price : t.entries[i].price < price
+    }
+
     /// Leverage used for the ticket: chosen, else the position's, else the Bedrag default.
     func ticketLeverage(_ t: Ticket) -> Int { t.leverage ?? position?.leverage ?? amountLev }
 
@@ -77,7 +84,7 @@ extension AppState {
                               entries: entries, stopLoss: t.useStopLoss && !t.reduceOnly ? t.stopLoss : nil,
                               maxLeverage: a.maxLeverage, szDecimals: a.szDecimals)
         input.takerFeeRate = feeRates.taker
-        input.entryFeeRate = t.isMarket && t.entries.count == 1 ? feeRates.taker : feeRates.maker
+        input.entryFeeRate = t.entries.count == 1 && (t.isMarket || ticketIsStopEntry(t, 0)) ? feeRates.taker : feeRates.maker
         input.takeProfits = ticketTPTargets(t)
         if !sizedByRisk { input.sizeOverride = derivedSize(t) }
         input.leverageOverride = t.leverage
@@ -93,10 +100,10 @@ extension AppState {
 
     /// Take-profit orders already on the position (reduce-only limits and TP triggers).
     var existingTPOrders: [OpenOrder] {
-        coinOrders.filter { $0.reduceOnly && (!$0.isTrigger || $0.tpsl == .tp) }
+        coinOrders.filter { $0.isTakeProfit }
     }
 
-    var existingStopOrder: OpenOrder? { coinOrders.first { $0.isTrigger && $0.tpsl == .sl } }
+    var existingStopOrder: OpenOrder? { coinOrders.first { $0.isStop } }
 
     private func ticketTPTargets(_ t: Ticket) -> [TPTarget] {
         if !t.tps.isEmpty { return t.tps.map { TPTarget(price: $0.price, fraction: $0.pct / 100) } }
@@ -281,7 +288,7 @@ extension AppState {
         let orders = account.orders(for: c)
         let entries = TPEditor.restingEntries(orders, isLong: m.isLong)
         let total = entries.reduce(0) { $0 + $1.size }
-        guard total > 0, let stop = orders.first(where: { $0.isTrigger && $0.tpsl == .sl && $0.reduceOnly })?.displayPx ?? m.stop else { return }
+        guard total > 0, let stop = orders.first(where: { $0.isStop })?.displayPx ?? m.stop else { return }
         let avg = entries.reduce(0) { $0 + $1.size * $1.limitPx } / total
         let dir: Double = m.isLong ? 1 : -1
         let perCoin = dir * (avg - stop) + feeRates.maker * avg + feeRates.taker * stop
@@ -571,6 +578,12 @@ extension AppState {
                 let market = t.isMarket && k == 0
                 let px = market ? HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
                                 : HLFormat.roundPrice(lvl.price, szDecimals: a.szDecimals)
+                if ticketIsStopEntry(t, k) {
+                    // Breakout: waits for the price to pass it, then enters at market.
+                    reqs.append(OrderRequest(asset: a, isBuy: isBuy, size: sz, limitPx: px, reduceOnly: false,
+                                             kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl)))
+                    continue
+                }
                 reqs.append(OrderRequest(asset: a, isBuy: isBuy, size: sz, limitPx: px, reduceOnly: t.reduceOnly, kind: .limit(tif: market ? "Ioc" : "Gtc")))
             }
             let entryCount = reqs.count

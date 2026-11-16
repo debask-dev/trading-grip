@@ -120,7 +120,7 @@ public enum TradeKeeper {
         // A ladder or an add brings one stop per entry (linked on the exchange, so the trade is protected while
         // Grip is closed). While entries still wait, those stops are left alone; once nothing waits, they are
         // merged into one stop for the whole position.
-        let stops = orders.filter { $0.isTrigger && $0.tpsl == .sl && $0.reduceOnly }
+        let stops = orders.filter { $0.isStop }
         let sl = stops.first
         let changed = abs(size - m.lastSize) > 1e-12
         if !changed {
@@ -139,7 +139,7 @@ public enum TradeKeeper {
         }
         if size > m.lastSize + 1e-12 {
             // Take-profits: place the ladder at the first fill, scale existing ones after that.
-            let existingTPs = orders.filter { $0.reduceOnly && (!$0.isTrigger || $0.tpsl == .tp) && $0.size > 0 }
+            let existingTPs = orders.filter { $0.isTakeProfit && $0.size > 0 }
             if let tps = m.tps {
                 for o in existingTPs where m.lastSize > 0 { actions.append(.cancel(oid: o.oid)) }
                 let ladder = split(total: total, prices: tps.prices, fractions: tps.fractions, szDecimals: szDecimals)

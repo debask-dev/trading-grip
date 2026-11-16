@@ -29,7 +29,7 @@ extension AppState {
     /// Side of the trade on this coin: the position, else the waiting entry.
     var tradeSide: Bool? {
         if let pos = position { return pos.isLong }
-        if let e = coinOrders.first(where: { !$0.isTrigger && !$0.reduceOnly }) { return e.isBuy }
+        if let e = coinOrders.first(where: { $0.isEntry }) { return e.isBuy }
         return managed[coin]?.isLong
     }
 
@@ -176,7 +176,7 @@ extension AppState {
         guard let e = orderEdit, let o = account.openOrders.first(where: { $0.oid == e.oid }),
               let a = assets.first(where: { $0.name == o.coin }) else { orderEdit = nil; return }
         let px = HLFormat.roundPrice(e.price, szDecimals: a.szDecimals)
-        let isStop = o.isTrigger && o.tpsl == .sl
+        let isStop = o.isStop
         // The stop always covers the whole position; only its price changes.
         let size = isStop ? (o.size > 0 ? o.size : abs(position?.size ?? 0)) : HLFormat.roundSize(e.size, szDecimals: a.szDecimals)
         guard size > 0, isStop || size * px >= TradeKeeper.minOrderValue else {
@@ -192,7 +192,7 @@ extension AppState {
                 try await moveOtherStops(coin: o.coin, asset: a, to: px, except: o.oid)
             }
             // An entry that has not filled yet: its linked stop and take-profit follow the new size.
-            if !o.reduceOnly && !o.isTrigger && position == nil, o.size > 0, abs(size - o.size) > 1e-12 {
+            if o.isEntry && position == nil, o.size > 0, abs(size - o.size) > 1e-12 {
                 for c in coinOrders where c.reduceOnly && c.isBuy != o.isBuy && abs(c.size - o.size) < 1e-12 {
                     try await execModify(oid: c.oid, request(for: c, asset: a, price: c.displayPx, size: size))
                 }
