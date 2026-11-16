@@ -26,6 +26,10 @@ public struct ManagedTrade: Codable, Equatable, Sendable {
     public var plannedRisk: Double?
     /// How many entries the trade was placed with (for ●○○ in the chart).
     public var entryCount: Int?
+    /// Sized by max loss: moving an entry or the stop before the fill resizes the setup to the same risk.
+    public var riskSized: Bool?
+    /// Leverage the setup was placed with.
+    public var leverage: Int?
 
     public init(isLong: Bool, stop: Double? = nil, entryOids: [Int64] = [], lastSize: Double, tps: PendingTPs? = nil) {
         self.isLong = isLong; self.stop = stop; self.entryOids = entryOids; self.lastSize = lastSize; self.tps = tps

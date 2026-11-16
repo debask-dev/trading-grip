@@ -41,6 +41,27 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Setup aanpassen · {}	Change setup · {}
+Wijzig setup	Change setup
+Lijnen uit	Lines off
+Je wachtende orders worden geannuleerd en opnieuw geplaatst met deze waarden.	Your waiting orders are cancelled and placed again with these values.
+De lijnen komen in de chart zodra je iets invult of op de knop klikt.	The lines appear in the chart as soon as you fill in something or click the button.
+Setup aanpassen	Change setup
+De hele wachtende setup terug in het formulier: hefboom, grootte, entry, stop en take-profits	The whole waiting setup back in the form: leverage, size, entry, stop and take-profits
+Grootte niet aangepast: voor hetzelfde risico is meer marge nodig dan je vrij hebt.	Size not changed: the same risk needs more margin than you have free.
+Grootte aangepast: {}→ {} · risico blijft {}	Size changed: {}→ {} · risk stays {}
+Grootte niet aangepast: {}	Size not changed: {}
+Let op: je oude setup is al geannuleerd en de nieuwe is niet geplaatst.	Note: your old setup was already cancelled and the new one was not placed.
+{} · {}× {}	{} · {}× {}
+Netto na fees{} · {} van je portfolio	Net after fees{} · {} of your portfolio
+Stop	Stop
+→ BE	→ BE
+Doel	Target
+Klik om je take-profits aan te passen	Click to change your take-profits
+entry {}	entry {}
+gerealiseerd {}	realised {}
+Omkeren…	Reverse…
+Sluit deze positie en opent dezelfde grootte de andere kant op (market). Je stop en take-profits vervallen.	Closes this position and opens the same size the other way (market). Your stop and take-profits are cancelled.
 Raster sterkte	Grid strength
 Favorieten in de balk	Favourites in the bar
 Alle timeframes en je favorieten	All timeframes and your favourites

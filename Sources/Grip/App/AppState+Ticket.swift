@@ -113,6 +113,7 @@ extension AppState {
     func newTicket(long: Bool, entry atPrice: Double? = nil) {
         let p = price
         guard p > 0 else { return }
+        lastOrderLong = long
         if panelMode == .fast {
             // ⌥L / ⌥S in Snel just pick the side.
             quickLong = long
@@ -192,6 +193,8 @@ extension AppState {
             return
         }
         guard var t = ticket else { return }
+        // The untouched form is simply filled in again for the new way of sizing.
+        if t.linesHidden { ticket = nil; ensureDraftTicket(); return }
         switch panelMode {
         case .fast:
             break
@@ -212,6 +215,111 @@ extension AppState {
             break
         }
         ticket = t
+    }
+
+    /// Order tab (Max verlies, Bedrag) without a position: the form is there straight away, on the side of your last
+    /// order. Its lines stay out of the chart until you change something. Untouched, it follows the price.
+    func ensureDraftTicket() {
+        guard !isDemoVideo, tab == .trade, panelMode == .risk || panelMode == .amount, price > 0, asset != nil, position == nil else { return }
+        if let t = ticket {
+            guard t.linesHidden, !t.replacesSetup, t.madeAt > 0, abs(price - t.madeAt) / t.madeAt > 0.003 else { return }
+        }
+        newTicket(long: lastOrderLong)
+        // In one go: a second change to a hidden form would count as you touching it.
+        if var t = ticket {
+            t.linesHidden = true
+            t.madeAt = price
+            ticket = t
+        }
+    }
+
+    /// Shows the form's lines in the chart, freshly placed around the current price.
+    func revealDraftTicket() {
+        guard let t = ticket, t.linesHidden else { return }
+        newTicket(long: t.isLong)
+    }
+
+    /// A setup that still waits to fill, back in the form: entries, stop, take-profits, leverage. Placing it
+    /// cancels the old orders and puts the changed setup in their place.
+    func startSetupEdit() {
+        guard position == nil, let side = tradeSide else { return }
+        let entries = TPEditor.restingEntries(coinOrders, isLong: side).sorted { side ? $0.limitPx > $1.limitPx : $0.limitPx < $1.limitPx }
+        let total = entries.reduce(0) { $0 + $1.size }
+        guard total > 0 else { return }
+        let m = managed[coin]
+        var pcts = entries.map { ($0.size / total * 100).rounded() }
+        pcts[pcts.count - 1] += 100 - pcts.reduce(0, +)
+        let stop = existingStopOrder?.displayPx ?? m?.stop
+        let avg = entries.reduce(0) { $0 + $1.size * $1.limitPx } / total
+        var t = Ticket(isLong: side, entries: zip(entries, pcts).map { TPLevel(price: $0.limitPx, pct: $1) },
+                       stopLoss: stop ?? roundToTick(avg * (side ? 0.99 : 1.01)),
+                       tps: currentTPs.map { TPLevel(price: $0.price, pct: max(($0.fraction * 100).rounded(), 1)) }, isMarket: false)
+        t.useStopLoss = stop != nil
+        t.replacesSetup = true
+        t.leverage = m?.leverage
+        t.moveSLToBreakEven = breakEvenAfterTP.contains(coin)
+        let byRisk = m?.riskSized == true && stop != nil
+        t.riskSized = byRisk
+        if !byRisk {
+            t.amountUnit = .coin
+            t.amount = total
+            t.leverage = m?.leverage ?? amountLev
+        }
+        tpDraft = nil
+        orderEdit = nil
+        ticket = nil
+        panelMode = byRisk ? .risk : .amount
+        ticket = t
+        tab = .trade
+    }
+
+    /// Before the fill, a setup sized by max loss keeps that loss: after an entry or the stop was moved, the entries
+    /// (and the stop and take-profit linked to them) are resized so the stop still costs what was planned.
+    func resizeRestingSetup(coin c: String) async {
+        guard account.position(for: c) == nil, let m = managed[c], m.riskSized == true, let risk = m.plannedRisk, risk > 0,
+              let a = assets.first(where: { $0.name == c }) else { return }
+        let orders = account.orders(for: c)
+        let entries = TPEditor.restingEntries(orders, isLong: m.isLong)
+        let total = entries.reduce(0) { $0 + $1.size }
+        guard total > 0, let stop = orders.first(where: { $0.isTrigger && $0.tpsl == .sl && $0.reduceOnly })?.displayPx ?? m.stop else { return }
+        let avg = entries.reduce(0) { $0 + $1.size * $1.limitPx } / total
+        let dir: Double = m.isLong ? 1 : -1
+        let perCoin = dir * (avg - stop) + feeRates.maker * avg + feeRates.taker * stop
+        guard perCoin > 0 else { return }
+        let factor = risk / perCoin / total
+        guard abs(factor - 1) > 0.01 else { return }
+        do {
+            if factor > 1, !isExampleEquity {
+                // Bigger needs more margin: raise the leverage when that is what it takes, or leave the size alone.
+                let lev = max(m.leverage ?? 1, 1)
+                let need = Int((total * factor * avg / max(account.withdrawable * 0.95, 1e-9) - 1e-9).rounded(.up))
+                if need > lev {
+                    guard need <= a.maxLeverage else {
+                        toast(T("Grootte niet aangepast: voor hetzelfde risico is meer marge nodig dan je vrij hebt."), .info, coin: c)
+                        return
+                    }
+                    try await execLeverage(a, isCross: useCrossMargin && !a.onlyIsolated, leverage: need)
+                    managed[c]?.leverage = need
+                }
+            }
+            var done = Set<Int64>()
+            var newTotal = 0.0
+            for e in entries {
+                let size = HLFormat.roundSize(e.size * factor, szDecimals: a.szDecimals, down: true)
+                guard size * e.limitPx >= TradeKeeper.minOrderValue, abs(size - e.size) > 1e-12 else { newTotal += e.size; continue }
+                try await execModify(oid: e.oid, request(for: e, asset: a, price: e.limitPx, size: size))
+                newTotal += size
+                // The stop and take-profit linked to this entry have its size.
+                for ch in orders where ch.reduceOnly && ch.isBuy != e.isBuy && !done.contains(ch.oid) && abs(ch.size - e.size) < 1e-9 {
+                    done.insert(ch.oid)
+                    try await execModify(oid: ch.oid, request(for: ch, asset: a, price: ch.displayPx, size: size))
+                }
+            }
+            toast(T("Grootte aangepast: \(fmt.size(total, coin: "", decimals: a.szDecimals))→ \(fmt.size(newTotal, coin: c, decimals: a.szDecimals)) · risico blijft \(fmt.usd(risk, decimals: 2))"), .success, coin: c)
+        } catch {
+            toast(T("Grootte niet aangepast: \(error.localizedDescription)"), .error, coin: c)
+        }
+        await refreshAccount()
     }
 
     /// Positie tab → "Op prijs…": a limit order that reduces the position, shown in the chart.
@@ -402,6 +510,8 @@ extension AppState {
 
     func requestPlaceTicket() {
         guard let t = ticket, let pl = plan else { return }
+        // Untouched form: first show what would be placed.
+        if t.linesHidden { revealDraftTicket(); return }
         guard t.isMarket && (confirmMarketOrders || ticketNeedsHold) else { Task { await placeTicket() }; return }
         let side = t.isLong ? "long" : "short"
         let what = t.reduceOnly ? T("Verkleinen (market)") : (pl.isAdd ? T("Market bijkopen (\(side))") : T("Market \(side) openen"))
@@ -417,7 +527,7 @@ extension AppState {
     func placeTicket() async {
         // One at a time: a second ⌘↩ or click while the first order is on its way must not send it again.
         guard !busy else { return }
-        guard let t = ticket, let a = asset, let pl = plan else { return }
+        guard let t = ticket, let a = asset, let pl = plan, !t.linesHidden else { return }
         guard pl.size > 0 else { toast(T("Vul een grootte in."), .error); return }
         guard hasAccount else { toast(T("Koppel eerst een account (⇧⌘A), of zet de oefenmodus aan."), .error); return }
         // Without a known balance the size was worked out on the $10.000 example: never send that.
@@ -434,8 +544,18 @@ extension AppState {
         defer { busy = false }
         let c = coin
         let pos = position
+        var replaced = false
         do {
             let isBuy = t.isLong
+            lastOrderLong = isBuy
+            if t.replacesSetup && pos == nil {
+                // Changing a waiting setup: the old orders go first (what is linked to an entry goes with it).
+                for o in coinOrders where !o.reduceOnly { try await execCancel(a, oid: o.oid) }
+                for o in coinOrders where o.reduceOnly { try? await execCancel(a, oid: o.oid) }
+                managed[c] = nil
+                breakEvenAfterTP.remove(c)
+                replaced = true
+            }
             if !t.reduceOnly {
                 let lev = min(max(t.leverage ?? pl.leverage, 1), a.maxLeverage)
                 if let pos {
@@ -513,6 +633,8 @@ extension AppState {
             for st in statuses.prefix(entryCount) { if case .resting(let oid) = st { m.entryOids.append(oid); orderKinds[oid] = .limit } }
             // 1R for the chart and the position list: the risk of the whole trade (also after adding).
             if let r = pl.riskUsd, r > 0 { m.plannedRisk = r }
+            if pos == nil { m.riskSized = t.riskSized }
+            m.leverage = min(max(t.leverage ?? pl.leverage, 1), a.maxLeverage)
             m.entryCount = pos == nil ? entryCount : (m.entryCount ?? 1) + entryCount
             if !ladder.isEmpty && !(simple && attachTP) {
                 // Under 100% together: only that part gets a take-profit, the rest runs until the stop.
@@ -571,6 +693,10 @@ extension AppState {
         } catch {
             toast(error.localizedDescription, .error)
             notify(.orderProblem, T("Order niet geplaatst"), error.localizedDescription)
+            if replaced {
+                toast(T("Let op: je oude setup is al geannuleerd en de nieuwe is niet geplaatst."), .error, coin: c)
+                await refreshAccount()
+            }
         }
     }
 

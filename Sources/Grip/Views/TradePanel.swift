@@ -53,6 +53,11 @@ struct TradePanel: View {
             }
             .padding(16)
         }
+        .onAppear { state.ensureDraftTicket() }
+        .onChange(of: state.ticket == nil) { state.ensureDraftTicket() }
+        .onChange(of: state.coin) { state.ensureDraftTicket() }
+        .onChange(of: state.panelMode) { state.ensureDraftTicket() }
+        .onChange(of: state.position == nil) { state.ensureDraftTicket() }
     }
 }
 
@@ -355,7 +360,7 @@ struct TicketCard: View {
         let reduce = t?.reduceOnly == true
         let adding = pl?.isAdd == true
         let byRisk = t?.riskSized == true
-        let hold = state.ticketNeedsHold
+        let hold = state.ticketNeedsHold && t?.linesHidden != true
         Card(title: title(t, adding: adding), trailing: AnyView(pill(t, adding: adding))) {
             if !reduce && !adding, let t {
                 HStack(spacing: 6) {
@@ -400,10 +405,13 @@ struct TicketCard: View {
             }
 
             HStack(spacing: 8) {
-                Button(T("Annuleer")) { state.ticket = nil }
-                    .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
-                    .frame(width: 92)
-                    .keyboardShortcut(.cancelAction)
+                if t?.linesHidden != true {
+                    // Without a position the form stays; this only takes its lines out of the chart again.
+                    Button(state.position == nil && t?.replacesSetup != true && !reduce ? T("Lijnen uit") : T("Annuleer")) { state.ticket = nil }
+                        .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                        .frame(width: 92)
+                        .keyboardShortcut(.cancelAction)
+                }
                 let off = pl == nil || state.busy || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true)
                 let sideColor = reduce ? Theme.orange : ((t?.isLong ?? true) ? Theme.green : Theme.red)
                 if hold {
@@ -429,6 +437,13 @@ struct TicketCard: View {
             }
             if hold {
                 Text(T("Market zonder stop: houd de knop even ingedrukt.")).font(.system(size: 10.5)).foregroundStyle(Theme.orange)
+            }
+            if t?.replacesSetup == true {
+                Text(T("Je wachtende orders worden geannuleerd en opnieuw geplaatst met deze waarden."))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+            } else if t?.linesHidden == true {
+                Text(T("De lijnen komen in de chart zodra je iets invult of op de knop klikt."))
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
             }
             if !state.canTrade {
                 Text(T("Om te handelen: koppel een account met API-wallet (⇧⌘A)."))
@@ -699,6 +714,7 @@ struct TicketCard: View {
 
     private func title(_ t: Ticket?, adding: Bool) -> String {
         guard let t else { return T("Nieuwe order") }
+        if t.replacesSetup { return T("Setup aanpassen · \(state.coin)") }
         if t.reduceOnly { return T("Verkleinen · \(state.coin)") }
         if adding { return T("Bijkopen · \(state.coin) \(t.isLong ? "long" : "short")") }
         return T("Nieuwe order")
@@ -721,6 +737,8 @@ struct TicketCard: View {
 
     private func placeTitle(_ t: Ticket?, adding: Bool) -> String {
         guard let t else { return T("Plaats") }
+        if t.linesHidden { return T("Toon in chart") }
+        if t.replacesSetup { return T("Wijzig setup") }
         let side = t.isLong ? "long" : "short"
         let n = t.entries.count
         if t.reduceOnly { return t.isMarket && n == 1 ? T("Verklein (market)") : T("Verklein") }
@@ -762,62 +780,85 @@ struct PositionSummary: View {
 struct PositionTab: View {
     @EnvironmentObject var state: AppState
     @State private var fraction = 0.5
+    /// What the action block shows: 0 = reduce, 1 = add, 2 = reverse.
+    @State private var action = 0
     private var priceDecimals: Int { max(0, -Int(floor(log10(state.priceTick) + 1e-9))) }
 
     var body: some View {
+        // More than one position: pick which one you are looking at.
+        if state.account.positions.count > 1 {
+            HStack(spacing: 4) {
+                ForEach(state.account.positions) { p in
+                    Button { state.coin = p.coin } label: {
+                        HStack(spacing: 4) {
+                            Circle().fill(p.isLong ? Theme.green : Theme.red).frame(width: 6, height: 6)
+                            Text(p.coin)
+                        }
+                    }
+                    .buttonStyle(ChipStyle(active: p.coin == state.coin))
+                }
+            }
+        }
         if let pos = state.position {
             let u = state.net(for: pos)
             let eq = max(state.account.accountValue, 1)
             let ot = state.openTrade
             let sl = state.existingStopOrder
             let tps = state.existingTPOrders
-            Card(title: T("Open positie"), trailing: AnyView(SidePill(isLong: pos.isLong))) {
+            Card(title: state.coin, trailing: AnyView(SidePill(isLong: pos.isLong))) {
                 HStack(alignment: .firstTextBaseline) {
-                    Text(state.fmt.signedUsd(u)).mono(24, .bold).foregroundStyle(Theme.pnl(u))
+                    Text(state.fmt.signedUsd(u)).mono(22, .bold).foregroundStyle(Theme.pnl(u))
                     Spacer()
-                    Text(Fmt.percent(u / eq) + T(" van portfolio")).mono(10.5).foregroundStyle(Theme.muted)
+                    Text(T("\(state.fmt.size(pos.size, coin: state.coin, decimals: state.szDecimals)) · \(pos.leverage)× \(pos.isCross ? "cross" : "isolated")"))
+                        .mono(10.5).foregroundStyle(Theme.muted)
                 }
-                Text(T("netto na fees\((ot?.funding ?? 0) != 0 ? " en funding" : "")")).font(.system(size: 10.5)).foregroundStyle(Theme.dim)
-                VStack(spacing: 5) {
-                    KV(T("Grootte · hefboom"), T("\(state.fmt.size(pos.size, coin: state.coin, decimals: state.szDecimals)) · \(pos.leverage)× \(pos.isCross ? "cross" : "isolated")"))
-                    MarginRow(pos: pos)
-                    KV(T("Gem. entry"), Fmt.price(pos.entryPx), color: Theme.blue)
-                    if let be = state.breakEven { KV(T("Break-even"), Fmt.price(be), color: Theme.muted) }
-                    // Stop and a single take-profit are typed right here; the line in the chart moves along.
-                    if let sl {
-                        FieldRow(label: T("Stop-loss")) {
-                            NumberField(value: state.pendingOrderPrices[sl.oid] ?? sl.displayPx, step: state.priceTick, decimals: priceDecimals, grouping: true,
-                                        color: Theme.red, range: state.priceTick...1e12) { state.scheduleMove(oid: sl.oid, to: $0) }
-                        }
-                    } else {
-                        KV(T("Stop-loss"), T("geen"), color: Theme.orange)
-                    }
-                    if let r = state.resultAtStop(pos) {
-                        KV(T("Hele trade bij stop"), "\(state.fmt.signedUsd(r, decimals: 2)) · \(Fmt.percent(r / eq, decimals: 2))", color: Theme.pnl(r))
-                    }
-                    let cover = TPEditor.coverage(state.currentTPs)
-                    if tps.count == 1, let tp = tps.first {
-                        FieldRow(label: T("Take-profit") + (cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : "")) {
-                            NumberField(value: state.pendingOrderPrices[tp.oid] ?? tp.displayPx, step: state.priceTick, decimals: priceDecimals, grouping: true,
-                                        color: Theme.green, range: state.priceTick...1e12) { state.scheduleMove(oid: tp.oid, to: $0) }
-                            PlusButton(help: T("Meerdere take-profits of een andere verdeling")) { state.startTPEdit() }
-                        }
-                    } else {
-                        KV(T("Take-profit"), tps.isEmpty ? T("geen") : tps.map { Fmt.price($0.displayPx) }.joined(separator: " · ") + (cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : ""),
-                           color: tps.isEmpty ? Theme.muted : (cover < 0.995 ? Theme.orange : Theme.green))
-                    }
-                    if let liq = pos.liquidationPx { KV(T("Liquidatie"), Fmt.price(liq), color: Theme.orange) }
-                    if let ot, ot.realized != 0 { KV(T("Al gerealiseerd"), state.fmt.signedUsd(ot.realized, decimals: 2), color: Theme.pnl(ot.realized)) }
-                }
+                .help(T("Netto na fees\((ot?.funding ?? 0) != 0 ? " en funding" : "") · \(Fmt.percent(u / eq)) van je portfolio"))
+                // The whole trade as in the chart: stop on the left, take-profits on the right, the marker is now.
+                if let cm = state.chartMeter { TradeBar(meter: cm.meter, fmt: state.fmt) }
+
+                // Stop and a single take-profit are typed right here; the line in the chart moves along.
                 HStack(spacing: 6) {
-                    if sl == nil { Button(T("+ Stop-loss")) { Task { await state.addPositionTpSl(.sl) } }.buttonStyle(ChipStyle(active: false, large: true)) }
-                    if tps.isEmpty { Button(T("+ Take-profit")) { Task { await state.addPositionTpSl(.tp) } }.buttonStyle(ChipStyle(active: false, large: true)) }
-                    if let sl, let be = state.breakEven, pos.isLong ? be > sl.displayPx : be < sl.displayPx {
-                        Button(T("Stop → break-even")) { Task { await state.moveStopToBreakEven(coin: pos.coin, force: true) } }
-                            .buttonStyle(ChipStyle(active: false, large: true))
-                            .help(T("Zet de stop-loss op \(Fmt.price(be)): deze trade kan dan niet meer verliezen (na fees)."))
+                    Text(T("Stop")).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                    Spacer(minLength: 4)
+                    if let sl {
+                        if let be = state.breakEven, pos.isLong ? be > sl.displayPx : be < sl.displayPx {
+                            Button(T("→ BE")) { Task { await state.moveStopToBreakEven(coin: pos.coin, force: true) } }
+                                .buttonStyle(.plain).font(.system(size: 10.5, weight: .semibold)).foregroundStyle(Theme.accent)
+                                .help(T("Zet de stop-loss op \(Fmt.price(be)): deze trade kan dan niet meer verliezen (na fees)."))
+                        }
+                        NumberField(value: state.pendingOrderPrices[sl.oid] ?? sl.displayPx, step: state.priceTick, decimals: priceDecimals, grouping: true,
+                                    color: Theme.red, range: state.priceTick...1e12) { state.scheduleMove(oid: sl.oid, to: $0) }
+                    } else {
+                        Text(T("geen")).font(.system(size: 12)).foregroundStyle(Theme.orange)
+                        Button(T("+ Stop-loss")) { Task { await state.addPositionTpSl(.sl) } }.buttonStyle(ChipStyle(active: false)).fixedSize()
                     }
                 }
+                let cover = TPEditor.coverage(state.currentTPs)
+                HStack(spacing: 6) {
+                    Text(T("Doel") + (!tps.isEmpty && cover < 0.995 ? " (\(Int((cover * 100).rounded()))%)" : "")).font(.system(size: 12.5)).foregroundStyle(Theme.muted)
+                    Spacer(minLength: 4)
+                    if tps.count == 1, let tp = tps.first {
+                        NumberField(value: state.pendingOrderPrices[tp.oid] ?? tp.displayPx, step: state.priceTick, decimals: priceDecimals, grouping: true,
+                                    color: Theme.green, range: state.priceTick...1e12) { state.scheduleMove(oid: tp.oid, to: $0) }
+                        PlusButton(help: T("Meerdere take-profits of een andere verdeling")) { state.startTPEdit() }
+                    } else if tps.isEmpty {
+                        Text(T("geen")).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        Button(T("+ Take-profit")) { Task { await state.addPositionTpSl(.tp) } }.buttonStyle(ChipStyle(active: false)).fixedSize()
+                    } else {
+                        Button(tps.map { Fmt.price($0.displayPx) }.joined(separator: " · ")) { state.startTPEdit() }
+                            .buttonStyle(.plain).font(.system(size: 11.5, design: .monospaced)).foregroundStyle(cover < 0.995 ? Theme.orange : Theme.green)
+                            .help(T("Klik om je take-profits aan te passen"))
+                    }
+                }
+                // Everything else in one quiet line.
+                let details: [String?] = [T("entry \(Fmt.price(pos.entryPx))"),
+                      state.breakEven.map { "BE " + Fmt.price($0) },
+                      pos.liquidationPx.map { "liq " + Fmt.price($0) },
+                      T("marge \(state.fmt.usd(pos.marginUsed))"),
+                      (ot?.realized ?? 0) != 0 ? T("gerealiseerd \(state.fmt.signedUsd(ot?.realized ?? 0, decimals: 2))") : nil]
+                Text(details.compactMap { $0 }.joined(separator: " · "))
+                    .mono(10.5).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 if state.breakEvenAfterTP.contains(pos.coin) {
                     Label(T("Stop gaat naar break-even na de eerste TP"), systemImage: "arrow.right.to.line")
                         .font(.system(size: 10.5)).foregroundStyle(Theme.accent)
@@ -827,28 +868,45 @@ struct PositionTab: View {
             if state.ticket != nil {
                 TicketCard()
             } else {
-                Card(title: T("Bijkopen")) {
-                    Text(T("Extra entry op deze positie. Je stop en take-profits groeien mee.")).font(.system(size: 11)).foregroundStyle(Theme.dim)
-                    Button { state.newTicket(long: pos.isLong) } label: { Text(T("Bijkopen…")).frame(maxWidth: .infinity) }
-                        .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
-                }
-                Card(title: T("Verkleinen")) {
-                    HStack(spacing: 6) {
-                        ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { f in
-                            Button("\(Int(f * 100))%") { fraction = f }
-                                .buttonStyle(ChipStyle(active: fraction == f, large: true))
-                                .demoAnchor("close-\(f)")
+                // One block for what you can do with the position; only the chosen one opens up.
+                VStack(alignment: .leading, spacing: 10) {
+                    Picker("", selection: $action) {
+                        Text(T("Verkleinen")).tag(0)
+                        Text(T("Bijkopen")).tag(1)
+                        Text(T("Omkeren")).tag(2)
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                    if action == 0 {
+                        HStack(spacing: 6) {
+                            ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { f in
+                                Button("\(Int(f * 100))%") { fraction = f }
+                                    .buttonStyle(ChipStyle(active: fraction == f, large: true))
+                                    .demoAnchor("close-\(f)")
+                            }
                         }
-                    }
-                    HStack(spacing: 8) {
-                        Button { state.requestClose(fraction: fraction) } label: { Text(T("Nu (market)")).frame(maxWidth: .infinity) }
-                            .buttonStyle(BigButtonStyle(color: Theme.orange))
-                            .disabled(state.busy)
-                        Button { state.startReduce(fraction: fraction) } label: { Text(T("Op prijs…")).frame(maxWidth: .infinity) }
+                        HStack(spacing: 8) {
+                            Button { state.requestClose(fraction: fraction) } label: { Text(T("Nu (market)")).frame(maxWidth: .infinity) }
+                                .buttonStyle(BigButtonStyle(color: Theme.orange))
+                                .disabled(state.busy)
+                            Button { state.startReduce(fraction: fraction) } label: { Text(T("Op prijs…")).frame(maxWidth: .infinity) }
+                                .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                                .help(T("Limit-order die je positie kleiner maakt; de lijn staat in de chart"))
+                        }
+                    } else if action == 1 {
+                        Text(T("Extra entry op deze positie. Je stop en take-profits groeien mee.")).font(.system(size: 11)).foregroundStyle(Theme.dim)
+                        Button { state.newTicket(long: pos.isLong) } label: { Text(T("Bijkopen…")).frame(maxWidth: .infinity) }
                             .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
-                            .help(T("Limit-order die je positie kleiner maakt; de lijn staat in de chart"))
+                    } else {
+                        Text(T("Sluit deze positie en opent dezelfde grootte de andere kant op (market). Je stop en take-profits vervallen."))
+                            .font(.system(size: 11)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+                        Button { state.requestReverse(coin: pos.coin) } label: { Text(T("Omkeren…")).frame(maxWidth: .infinity) }
+                            .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                            .disabled(state.busy)
                     }
                 }
+                .padding(12)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.line))
             }
             OrdersCard()
         } else {
@@ -1038,9 +1096,17 @@ struct OrdersCard: View {
         let pending = state.position == nil ? state.managed[state.coin]?.tps : nil
         if !orders.isEmpty || draft != nil {
             Card(title: T("Open orders \(state.coin)"), trailing: draft == nil && state.canEditTPs ? AnyView(
-                Button(T("TP's aanpassen")) { state.startTPEdit() }
-                    .buttonStyle(ChipStyle(active: false))
-                    .help(T("Prijs, aantal en verdeling van je take-profits wijzigen, ook voordat de entry gevuld is"))
+                HStack(spacing: 4) {
+                    if state.position == nil {
+                        Button(T("Setup aanpassen")) { state.startSetupEdit() }
+                            .buttonStyle(ChipStyle(active: false))
+                            .help(T("De hele wachtende setup terug in het formulier: hefboom, grootte, entry, stop en take-profits"))
+                    }
+                    Button(T("TP's aanpassen")) { state.startTPEdit() }
+                        .buttonStyle(ChipStyle(active: false))
+                        .help(T("Prijs, aantal en verdeling van je take-profits wijzigen, ook voordat de entry gevuld is"))
+                }
+                .fixedSize()
             ) : nil) {
                 if let draft { TPEditorView(draft: draft) }
                 ForEach(orders) { o in

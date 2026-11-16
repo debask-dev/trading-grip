@@ -90,6 +90,12 @@ struct Ticket: Equatable {
     var amountUnit: AmountUnit = .margin
     /// Sized by your max loss (Risico) instead of by the amount.
     var riskSized = true
+    /// The form is there without a first click, but its lines stay out of the chart until you touch it.
+    var linesHidden = false
+    /// Price when the untouched form was filled in (it is filled in again when the price has moved on).
+    var madeAt: Double = 0
+    /// Changing a setup that waits to fill: placing cancels the old orders first.
+    var replacesSetup = false
 
     var entry: Double {
         get { entries.first?.price ?? 0 }
@@ -302,7 +308,19 @@ final class AppState: ObservableObject {
     @Published var tool: ChartTool = .cursor
     @Published var trendlines: [Trendline] = []
     @Published var selectedTrendline: UUID?
-    @Published var ticket: Ticket?
+    @Published var ticket: Ticket? {
+        didSet {
+            // First change to the untouched form: from now on its lines show in the chart.
+            if var t = ticket, t.linesHidden, let old = oldValue, old.linesHidden, t != old {
+                t.linesHidden = false
+                ticket = t
+            }
+        }
+    }
+    /// Side of the last order: the side the form starts with.
+    var lastOrderLong: Bool = UserDefaults.standard.object(forKey: "lastOrderLong") as? Bool ?? true {
+        didSet { defaults.set(lastOrderLong, forKey: "lastOrderLong") }
+    }
     @Published var dragCloseFraction: Double = 0.5
     @Published var toasts: [Toast] = []
     @Published var busy = false
@@ -649,6 +667,7 @@ final class AppState: ObservableObject {
                         guard let self else { return }
                         self.midsFlushScheduled = false
                         if self.mids != self.liveMids { self.mids = self.liveMids }
+                        self.ensureDraftTicket()
                     }
                 }
             }
@@ -942,7 +961,15 @@ final class AppState: ObservableObject {
 
     func execModify(oid: Int64, _ req: OrderRequest) async throws {
         if paperMode { try paper.modify(oid: oid, to: req); paperChanged(); return }
-        try await client.exchange(HLActions.modify(oid: oid, order: req), signer: try requireSigner())
+        let st = try await client.exchange(HLActions.modify(oid: oid, order: req), signer: try requireSigner())
+        // A changed order can come back under a new id: keep following it as the same entry.
+        if case .resting(let newOid)? = st.first, newOid != 0, newOid != oid {
+            for (c, m) in managed where m.entryOids.contains(oid) {
+                managed[c]?.entryOids = m.entryOids.map { $0 == oid ? newOid : $0 }
+            }
+            if let kind = orderKinds[oid] { orderKinds[newOid] = kind }
+            if let px = pendingOrderPrices.removeValue(forKey: oid) { pendingOrderPrices[newOid] = px }
+        }
     }
 
     func execCancel(_ a: AssetInfo, oid: Int64) async throws {
@@ -1031,6 +1058,7 @@ final class AppState: ObservableObject {
             toast(error.localizedDescription, .error)
         }
         await refreshAccount()
+        if !o.reduceOnly || (o.isTrigger && o.tpsl == .sl) { await resizeRestingSetup(coin: o.coin) }
     }
 
     /// Why an open order cannot go to this price (nil = it can): a stop or take-profit past the current price would go
@@ -1201,7 +1229,7 @@ final class AppState: ObservableObject {
 
     var chartLines: [ChartLine] {
         var lines: [ChartLine] = []
-        let t = ticket
+        let t = ticket.flatMap { $0.linesHidden ? nil : $0 }
         if let t {
             let pl = plan
             for (i, tp) in t.tps.enumerated() where !t.reduceOnly {
@@ -1258,7 +1286,7 @@ final class AppState: ObservableObject {
             }
             if let liq = pos.liquidationPx, liq > 0 { lines.append(ChartLine(id: .liquidation, price: liq, color: Palette.red.withAlphaComponent(0.8), dashed: true, draggable: false)) }
         }
-        if position == nil, ticket == nil, let cm, cm.restingEntries > 0 {
+        if position == nil, t == nil, let cm, cm.restingEntries > 0 {
             lines.append(ChartLine(id: .plan, price: cm.meter.plannedEntry, color: Palette.muted, dashed: true, draggable: false,
                                    meter: true, labelLeft: true))
         }
