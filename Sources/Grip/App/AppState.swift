@@ -1322,12 +1322,15 @@ final class AppState: ObservableObject {
         var sides: [Bool] = []
         if let pos = position { sides.append(pos.isLong) }
         for o in coinOrders where !sides.contains(setupSide(o)) { sides.append(setupSide(o)) }
-        let draft = ticket.map { !$0.linesHidden } ?? false
+        // The form only counts as a setup of its own when it draws an entry, stop or take-profit
+        // (a market order without stop or TP shows nothing but its liquidation line).
+        let draft = ticket.map { t in !t.linesHidden && (!t.isMarket || t.entries.count > 1 || (t.useStopLoss && !t.reduceOnly) || !t.tps.isEmpty) } ?? false
         guard sides.count + (draft ? 1 : 0) > 1 else { return "" }
-        let letters = ["Ⓐ", "Ⓑ", "Ⓒ"]
-        if concept { return letters[min(sides.count, 2)] + " " }
+        // Plain capitals: circled letters are not readable at label size.
+        let letters = ["A", "B", "C"]
+        if concept { return draft ? letters[min(sides.count, 2)] + " · " : "" }
         guard let long, let i = sides.firstIndex(of: long) else { return "" }
-        return letters[min(i, 2)] + " "
+        return letters[min(i, 2)] + " · "
     }
 
     /// Live label for a chart line: which setup it belongs to, what it means, and whether it is on the exchange yet.
