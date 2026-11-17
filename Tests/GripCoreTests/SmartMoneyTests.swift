@@ -36,7 +36,7 @@ final class SmartMoneyTests: XCTestCase {
     }
 }
 
-final class TradeStatsTests: XCTestCase {
+final class PortfolioFiguresTests: XCTestCase {
     private func trade(_ coin: String, long: Bool, pnl: Double, hour: Int, r: Double? = nil) -> ClosedTrade {
         let close = Date(timeIntervalSince1970: 1_700_000_000 + Double(hour) * 3600)
         return ClosedTrade(id: "\(coin)-\(hour)", coin: coin, isLong: long, openTime: close.addingTimeInterval(-600), closeTime: close,
@@ -45,7 +45,7 @@ final class TradeStatsTests: XCTestCase {
 
     func testKeyFigures() {
         // +100, −50, +30, −40 in this order: tops at 100, falls to 50 (drawdown 50), 80, then 40 (drawdown 60).
-        let s = TradeStats.compute([trade("BTC", long: true, pnl: 100, hour: 0, r: 2), trade("ETH", long: false, pnl: -50, hour: 1, r: -1),
+        let s = PortfolioFigures.compute([trade("BTC", long: true, pnl: 100, hour: 0, r: 2), trade("ETH", long: false, pnl: -50, hour: 1, r: -1),
                                     trade("BTC", long: true, pnl: 30, hour: 2), trade("ETH", long: true, pnl: -40, hour: 3)])
         XCTAssertEqual(s.count, 4)
         XCTAssertEqual(s.winRate, 0.5, accuracy: 1e-9)

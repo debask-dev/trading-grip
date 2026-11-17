@@ -1,7 +1,7 @@
 import Foundation
 
 /// Figures over a set of closed trades, for the Portfolio tab.
-public struct TradeStats: Equatable, Sendable {
+public struct PortfolioFigures: Equatable, Sendable {
     public struct Group: Equatable, Sendable, Identifiable {
         public var name: String
         public var net: Double
@@ -39,8 +39,8 @@ public struct TradeStats: Equatable, Sendable {
 
     public var winRate: Double { count > 0 ? Double(wins) / Double(count) : 0 }
 
-    public static func compute(_ all: [ClosedTrade], calendar: Calendar = .current) -> TradeStats {
-        var s = TradeStats()
+    public static func compute(_ all: [ClosedTrade], calendar: Calendar = .current) -> PortfolioFigures {
+        var s = PortfolioFigures()
         let trades = all.sorted { $0.closeTime < $1.closeTime }
         guard !trades.isEmpty else { return s }
         s.count = trades.count

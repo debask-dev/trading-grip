@@ -11,7 +11,7 @@ struct PortfolioStats: View {
     @State private var day: Date?
 
     var body: some View {
-        let s = TradeStats.compute(trades)
+        let s = PortfolioFigures.compute(trades)
         let f = state.fmt
         if s.count == 0 {
             EmptyView()
@@ -62,7 +62,7 @@ struct PortfolioStats: View {
         return c
     }
 
-    private func averages(_ s: TradeStats, _ f: Fmt) -> String {
+    private func averages(_ s: PortfolioFigures, _ f: Fmt) -> String {
         if let w = s.avgWinR, let l = s.avgLossR {
             return "+" + Fmt.number(w, decimals: 1) + "R / " + Fmt.number(l, decimals: 1) + "R"
         }
@@ -70,7 +70,7 @@ struct PortfolioStats: View {
     }
 
     /// One row: name, a bar from the middle to the right (profit) or left (loss), result and win rate.
-    private func bar(_ g: TradeStats.Group, scale: Double, _ f: Fmt) -> some View {
+    private func bar(_ g: PortfolioFigures.Group, scale: Double, _ f: Fmt) -> some View {
         HStack(spacing: 8) {
             Text(g.name).font(.system(size: 12, weight: .semibold)).frame(width: 52, alignment: .leading).lineLimit(1)
             GeometryReader { geo in
@@ -91,7 +91,7 @@ struct PortfolioStats: View {
 
     /// The last six weeks as squares, Monday first. A click shows that day's trades underneath.
     @ViewBuilder
-    private func calendar(_ s: TradeStats, _ f: Fmt) -> some View {
+    private func calendar(_ s: PortfolioFigures, _ f: Fmt) -> some View {
         let cal = mondayCalendar
         let today = cal.startOfDay(for: Date())
         let weekStart = cal.dateInterval(of: .weekOfYear, for: today)?.start ?? today
