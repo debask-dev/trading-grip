@@ -41,13 +41,6 @@ extension AppState {
         }
     }
 
-    /// An entry on the far side of the price (a long above it, a short below it) cannot rest as a limit: it would
-    /// fill at once. It goes in as a stop-entry: it waits until the price breaks through and then enters at market.
-    func ticketIsStopEntry(_ t: Ticket, _ i: Int) -> Bool {
-        guard !t.reduceOnly, t.entries.indices.contains(i), !(t.isMarket && i == 0), price > 0 else { return false }
-        return t.isLong ? t.entries[i].price > price : t.entries[i].price < price
-    }
-
     /// Leverage used for the ticket: chosen, else the position's, else the Bedrag default.
     func ticketLeverage(_ t: Ticket) -> Int { t.leverage ?? position?.leverage ?? amountLev }
 
@@ -84,7 +77,7 @@ extension AppState {
                               entries: entries, stopLoss: t.useStopLoss && !t.reduceOnly ? t.stopLoss : nil,
                               maxLeverage: a.maxLeverage, szDecimals: a.szDecimals)
         input.takerFeeRate = feeRates.taker
-        input.entryFeeRate = t.entries.count == 1 && (t.isMarket || ticketIsStopEntry(t, 0)) ? feeRates.taker : feeRates.maker
+        input.entryFeeRate = t.isMarket && t.entries.count == 1 ? feeRates.taker : feeRates.maker
         input.takeProfits = ticketTPTargets(t)
         if !sizedByRisk { input.sizeOverride = derivedSize(t) }
         input.leverageOverride = t.leverage
@@ -150,7 +143,9 @@ extension AppState {
         let entry = atPrice ?? (p - dir * span * (reducing ? -0.06 : 0.04))
         let risk = span * 0.08
 
-        var t = Ticket(isLong: long, entries: [TPLevel(price: r(entry), pct: 100)], stopLoss: r(entry - dir * risk), tps: [], isMarket: false)
+        // Market or limit as you last chose (a price picked in the chart, or reducing at a price, is always a limit).
+        let market = atPrice == nil && !reducing && lastOrderMarket
+        var t = Ticket(isLong: long, entries: [TPLevel(price: r(entry), pct: 100)], stopLoss: r(entry - dir * risk), tps: [], isMarket: market)
         t.riskSized = panelMode == .risk && !reducing
         t.amountUnit = amountUnit
         t.amount = amountValue
@@ -224,9 +219,39 @@ extension AppState {
         ticket = t
     }
 
+    /// Long ⇄ short in the form. Everything you set stays: market or limit, leverage, size, the split of entries and
+    /// take-profits, stop to break-even. The prices are mirrored around the current price, so every distance stays
+    /// the same (a long limit 1% under the price becomes a short limit 1% above it).
+    func switchSide(toLong long: Bool) {
+        guard var t = ticket, t.isLong != long, !t.reduceOnly else { return }
+        // Against an open position this is not a new trade: newTicket asks first.
+        if let pos = position, pos.isLong != long { newTicket(long: long); return }
+        let p = price
+        guard p > 0 else { return }
+        let ref = t.isMarket ? p : t.entry
+        let mirror = { (v: Double) in self.roundToTick(2 * p - v) }
+        let newRef = t.isMarket ? p : mirror(ref)
+        for i in t.entries.indices { t.entries[i].price = mirror(t.entries[i].price) }
+        // Stop and take-profits keep their distance to the (first) entry, on the other side.
+        t.stopLoss = roundToTick(newRef + (ref - t.stopLoss))
+        for i in t.tps.indices { t.tps[i].price = roundToTick(newRef - (t.tps[i].price - ref)) }
+        t.isLong = long
+        lastOrderLong = long
+        ticket = t
+    }
+
+    /// Annuleer in the form: the order is cleared and the form starts fresh (its lines leave the chart). What you
+    /// chose as a habit stays: long or short, market or limit, the way of sizing.
+    func cancelTicket() {
+        ticket = nil
+        ensureDraftTicket()
+    }
+
     /// Order tab (Max verlies, Bedrag) without a position: the form is there straight away, on the side of your last
     /// order. Its lines stay out of the chart until you change something. Untouched, it follows the price.
     func ensureDraftTicket() {
+        // Once a position is open, an untouched form from before the fill goes: Positie shows the trade, not a form.
+        if position != nil, let t = ticket, t.linesHidden { ticket = nil }
         guard !isDemoVideo, tab == .trade, panelMode == .risk || panelMode == .amount, price > 0, asset != nil, position == nil else { return }
         if let t = ticket {
             guard t.linesHidden, !t.replacesSetup, t.madeAt > 0, abs(price - t.madeAt) / t.madeAt > 0.003 else { return }
@@ -578,12 +603,6 @@ extension AppState {
                 let market = t.isMarket && k == 0
                 let px = market ? HLFormat.slippagePrice(price, isBuy: isBuy, slippage: slippagePercent / 100, szDecimals: a.szDecimals)
                                 : HLFormat.roundPrice(lvl.price, szDecimals: a.szDecimals)
-                if ticketIsStopEntry(t, k) {
-                    // Breakout: waits for the price to pass it, then enters at market.
-                    reqs.append(OrderRequest(asset: a, isBuy: isBuy, size: sz, limitPx: px, reduceOnly: false,
-                                             kind: .trigger(triggerPx: px, isMarket: true, tpsl: .sl)))
-                    continue
-                }
                 reqs.append(OrderRequest(asset: a, isBuy: isBuy, size: sz, limitPx: px, reduceOnly: t.reduceOnly, kind: .limit(tif: market ? "Ioc" : "Gtc")))
             }
             let entryCount = reqs.count

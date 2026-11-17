@@ -317,6 +317,10 @@ final class AppState: ObservableObject {
             }
         }
     }
+    /// Market or limit, as last chosen in the form: a new order and a switch of side keep it.
+    var lastOrderMarket: Bool = UserDefaults.standard.bool(forKey: "lastOrderMarket") {
+        didSet { defaults.set(lastOrderMarket, forKey: "lastOrderMarket") }
+    }
     /// Side of the last order: the side the form starts with.
     var lastOrderLong: Bool = UserDefaults.standard.object(forKey: "lastOrderLong") as? Bool ?? true {
         didSet { defaults.set(lastOrderLong, forKey: "lastOrderLong") }
@@ -1269,9 +1273,8 @@ final class AppState: ObservableObject {
                 lines.append(ChartLine(id: .pendingTP(i), price: px, color: Palette.green.withAlphaComponent(0.45), dashed: true, draggable: false))
             }
         }
-        // While adding, the ticket's stop line stands for the position's stop.
-        let hideStop = t.map { $0.useStopLoss && !$0.reduceOnly && position != nil } ?? false
-        for o in coinOrders where !(hideStop && o.isStop) {
+        // The position's own stop always shows and can always be dragged, also while an order is in the form.
+        for o in coinOrders {
             if draft != nil && o.isTakeProfit { continue }
             let px = orderEdit?.oid == o.oid ? orderEdit!.price : (pendingOrderPrices[o.oid] ?? o.displayPx)
             let isStop = o.isStop
@@ -1364,7 +1367,7 @@ final class AppState: ObservableObject {
             if t.reduceOnly { return T("VERKLEIN \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(f.signedUsd(pl.reducePnl ?? 0))") }
             let side = t.isLong ? T("LONG") : T("SHORT")
             if t.entries.count == 1 {
-                return T("\(pl.isAdd ? "BIJ" : (ticketIsStopEntry(t, i) ? "STOP" : "LIMIT")) \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×")
+                return T("\(pl.isAdd ? "BIJ" : "LIMIT") \(side)  \(f.size(sz, coin: coin, decimals: szDecimals))  ·  \(t.leverage ?? pl.leverage)×")
             }
             return T("E\(i + 1) · \(Int(t.entries[i].pct))%  \(f.size(sz, coin: coin, decimals: szDecimals))")
         case .ticketSL:

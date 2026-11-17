@@ -47,7 +47,9 @@ Native macOS trading app (SwiftUI + AppKit) for Hyperliquid perps. Everything is
 - A ladder or an add sends every entry with its own linked stop (`normalTpsl`), so the exchange protects the trade without Grip; the keeper merges them into one stop once no entry waits. Not yet checked on the real exchange.
 - Kept trades (`managed`) are stored per account and apart for practice. No order is sent while the balance is unknown.
 - The order form is there without a first click (`ensureDraftTicket`); its lines stay out of the chart until it is touched (`Ticket.linesHidden`). A waiting setup can be loaded back into the form (`startSetupEdit`, cancel and replace), and a setup sized by max loss resizes itself when an entry or the stop is moved before the fill (`resizeRestingSetup`).
-- An entry on the far side of the price is sent as a stop-entry (a trigger that is not reduce-only). Use `OpenOrder.isEntry / isStop / isStopEntry / isTakeProfit` instead of testing `isTrigger` by hand.
+- Use `OpenOrder.isEntry / isStop / isStopEntry / isTakeProfit` instead of testing `isTrigger` by hand. Grip itself sends no stop-entries (that idea was dropped); `isStopEntry` only covers ones placed elsewhere.
+- The form remembers market/limit (`lastOrderMarket`) and side (`lastOrderLong`). Switching side mirrors the prices around the current price and keeps every other setting (`switchSide`). Annuleer clears the order and starts a fresh form (`cancelTicket`).
+- The position's own stop line is never hidden, also not while an order is in the form.
 - Chart labels: a letter (A · …) per setup when there is more than one, "concept" for what is still in the form, "na fill" for take-profits Grip places later. Placed orders are solid lines, the form's lines dashed.
 - One EMA and one SMA indicator, each with several lines (`IndicatorConfig.lines`). Smart money concepts is one indicator (`SmartMoney`, `SMCOptions`).
 - Timeframes: the header shows the favourites; ⌘1–9 and ⌘[ ⌘] follow them.

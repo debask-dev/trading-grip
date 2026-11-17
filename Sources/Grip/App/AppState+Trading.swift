@@ -70,8 +70,6 @@ extension AppState {
             items.append((T("Bijkopen hier (\(pos.isLong ? "long" : "short"))"), { [weak self] in self?.newTicket(long: pos.isLong, entry: px) }))
         } else if p > 0 && ticket == nil {
             items.append((px < p ? T("Limit long hier") : T("Limit short hier"), { [weak self] in self?.newTicket(long: px < p, entry: px) }))
-            // The other way round: enter when the price breaks through this level.
-            items.append((px > p ? T("Stop long hier (breakout)") : T("Stop short hier (breakout)"), { [weak self] in self?.newTicket(long: px > p, entry: px) }))
         }
         if position != nil {
             items.append(("-", {}))

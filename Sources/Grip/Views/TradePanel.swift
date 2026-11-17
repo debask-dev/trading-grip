@@ -364,11 +364,11 @@ struct TicketCard: View {
         Card(title: title(t, adding: adding), trailing: AnyView(pill(t, adding: adding))) {
             if !reduce && !adding, let t {
                 HStack(spacing: 6) {
-                    sideButton(T("Long"), on: t.isLong, color: Theme.green) { if !t.isLong { state.newTicket(long: true, entry: t.entry) } }
-                    sideButton(T("Short"), on: !t.isLong, color: Theme.red) { if t.isLong { state.newTicket(long: false, entry: t.entry) } }
+                    sideButton(T("Long"), on: t.isLong, color: Theme.green) { state.switchSide(toLong: true) }
+                    sideButton(T("Short"), on: !t.isLong, color: Theme.red) { state.switchSide(toLong: false) }
                 }
             }
-            Picker("", selection: Binding(get: { state.ticket?.isMarket ?? false }, set: { state.ticket?.isMarket = $0 })) {
+            Picker("", selection: Binding(get: { state.ticket?.isMarket ?? false }, set: { state.ticket?.isMarket = $0; state.lastOrderMarket = $0 })) {
                 Text(T("Limit")).tag(false)
                 Text((t?.entries.count ?? 1) > 1 ? T("E1 market") : T("Market")).tag(true)
             }
@@ -405,13 +405,12 @@ struct TicketCard: View {
             }
 
             HStack(spacing: 8) {
-                if t?.linesHidden != true {
-                    // Without a position the form stays; this only takes its lines out of the chart again.
-                    Button(state.position == nil && t?.replacesSetup != true && !reduce ? T("Lijnen uit") : T("Annuleer")) { state.ticket = nil }
-                        .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
-                        .frame(width: 92)
-                        .keyboardShortcut(.cancelAction)
-                }
+                // Clears the order: prices, extra entries and take-profits go, the form starts fresh.
+                Button(T("Annuleer")) { state.cancelTicket() }
+                    .buttonStyle(BigButtonStyle(color: Theme.card, textColor: Theme.text))
+                    .frame(width: 92)
+                    .keyboardShortcut(.cancelAction)
+                    .help(T("Order leegmaken en opnieuw beginnen (Esc)"))
                 let off = pl == nil || state.busy || (pl?.size ?? 0) <= 0 || !(pl?.blockers.isEmpty ?? true)
                 let sideColor = reduce ? Theme.orange : ((t?.isLong ?? true) ? Theme.green : Theme.red)
                 if hold {
@@ -437,10 +436,6 @@ struct TicketCard: View {
             }
             if hold {
                 Text(T("Market zonder stop: houd de knop even ingedrukt.")).font(.system(size: 10.5)).foregroundStyle(Theme.orange)
-            }
-            if let t, t.entries.indices.contains(where: { state.ticketIsStopEntry(t, $0) }) {
-                Text(T("Entry aan de andere kant van de koers: dat wordt een stop-entry. Hij wacht tot de koers erdoorheen gaat en stapt dan market in."))
-                    .font(.system(size: 10.5)).foregroundStyle(Theme.accent).fixedSize(horizontal: false, vertical: true)
             }
             if t?.replacesSetup == true {
                 Text(T("Je wachtende orders worden geannuleerd en opnieuw geplaatst met deze waarden."))
@@ -748,7 +743,6 @@ struct TicketCard: View {
         if t.reduceOnly { return t.isMarket && n == 1 ? T("Verklein (market)") : T("Verklein") }
         if adding { return t.isMarket ? T("Koop bij (market)") : (n > 1 ? T("Plaats \(n) bijkoop-orders") : T("Koop bij")) }
         if n > 1 { return T("Plaats \(n) entries") }
-        if state.ticketIsStopEntry(t, 0) { return T("Plaats stop \(side)") }
         return t.isMarket ? T("Market \(side)") : T("Plaats limit \(side)")
     }
 }

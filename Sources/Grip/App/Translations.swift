@@ -41,6 +41,7 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Order leegmaken en opnieuw beginnen (Esc)	Clear the order and start again (Esc)
 Trades · winst%	Trades · win%
 Gem. winst / verlies	Avg. win / loss
 Profit factor	Profit factor
@@ -55,10 +56,6 @@ Een stop-entry aan die kant van de koers gaat direct af. Hij staat terug.	A stop
 Stop-entry	Stop entry
 concept	draft
 na fill	after fill
-Stop long hier (breakout)	Stop long here (breakout)
-Stop short hier (breakout)	Stop short here (breakout)
-Plaats stop {}	Place stop {}
-Entry aan de andere kant van de koers: dat wordt een stop-entry. Hij wacht tot de koers erdoorheen gaat en stapt dan market in.	Entry on the far side of the price: this becomes a stop entry. It waits until the price breaks through and then enters at market.
 Smart money concepts	Smart money concepts
 Klik voor een andere kleur	Click for another colour
 + lijn	+ line
@@ -71,7 +68,6 @@ Gevoeligheid swings	Swing sensitivity
 Aantal candles links en rechts dat lager (hoger) moet zijn. Hoger = minder, grotere swings.	Candles on each side that must be lower (higher). Higher = fewer, larger swings.
 Setup aanpassen · {}	Change setup · {}
 Wijzig setup	Change setup
-Lijnen uit	Lines off
 Je wachtende orders worden geannuleerd en opnieuw geplaatst met deze waarden.	Your waiting orders are cancelled and placed again with these values.
 De lijnen komen in de chart zodra je iets invult of op de knop klikt.	The lines appear in the chart as soon as you fill in something or click the button.
 Setup aanpassen	Change setup
