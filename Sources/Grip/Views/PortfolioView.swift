@@ -140,6 +140,8 @@ struct PortfolioView: View {
                             .frame(height: 200)
                         }
                     }
+                    // Figures over the closed trades of the chosen period.
+                    PortfolioStats(trades: state.closedTrades.filter { $0.closeTime >= periodStart })
                     if state.hideAmounts {
                         Label(T("Bedragen zijn verborgen – je kunt deze pagina veilig screenshotten."), systemImage: "eye.slash")
                             .font(.system(size: 11.5)).foregroundStyle(Theme.muted)
@@ -152,6 +154,16 @@ struct PortfolioView: View {
 }
 
 extension PortfolioView {
+    /// Start of the chosen period (for the trade figures).
+    var periodStart: Date {
+        switch period {
+        case .day: return Date().addingTimeInterval(-86_400)
+        case .week: return Date().addingTimeInterval(-7 * 86_400)
+        case .month: return Date().addingTimeInterval(-30 * 86_400)
+        case .allTime: return .distantPast
+        }
+    }
+
     /// The data point closest in time to where the mouse is.
     func nearest(_ t: Date, in pts: [PortfolioSeries.Point]) -> PortfolioSeries.Point? {
         pts.min { abs($0.time.timeIntervalSince(t)) < abs($1.time.timeIntervalSince(t)) }

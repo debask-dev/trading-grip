@@ -46,6 +46,11 @@ Native macOS trading app (SwiftUI + AppKit) for Hyperliquid perps. Everything is
 - Red warnings (`Plan.blockers`: stop on the wrong side, under $10, no free margin) stop the order; orange ones only tell. A market order without a stop takes a held button.
 - A ladder or an add sends every entry with its own linked stop (`normalTpsl`), so the exchange protects the trade without Grip; the keeper merges them into one stop once no entry waits. Not yet checked on the real exchange.
 - Kept trades (`managed`) are stored per account and apart for practice. No order is sent while the balance is unknown.
+- The order form is there without a first click (`ensureDraftTicket`); its lines stay out of the chart until it is touched (`Ticket.linesHidden`). A waiting setup can be loaded back into the form (`startSetupEdit`, cancel and replace), and a setup sized by max loss resizes itself when an entry or the stop is moved before the fill (`resizeRestingSetup`).
+- An entry on the far side of the price is sent as a stop-entry (a trigger that is not reduce-only). Use `OpenOrder.isEntry / isStop / isStopEntry / isTakeProfit` instead of testing `isTrigger` by hand.
+- Chart labels: a circled letter per setup when there is more than one, "concept" for what is still in the form, "na fill" for take-profits Grip places later. Placed orders are solid lines, the form's lines dashed.
+- One EMA and one SMA indicator, each with several lines (`IndicatorConfig.lines`). Smart money concepts is one indicator (`SmartMoney`, `SMCOptions`).
+- Timeframes: the header shows the favourites; ⌘1–9 and ⌘[ ⌘] follow them.
 - Leverage is auto unless chosen. It never goes below the current leverage, and it fits the free margin (and the margin slot).
 - Margin budget: max positions (default 3), optional max total risk of all stops.
 - Indicators are chips after the OHLC line. Line indicators get a value tag on the price axis. RSI gets its own pane.

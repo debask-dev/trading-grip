@@ -41,6 +41,16 @@ Bijkoop-order{}	Add order{}
 {} geplaatst	{} placed
 Order verstuurd.	Order sent.
 Niet alles geplaatst: {}	Not everything was placed: {}
+Trades · winst%	Trades · win%
+Gem. winst / verlies	Avg. win / loss
+Profit factor	Profit factor
+Grootste drawdown	Largest drawdown
+Fees · funding	Fees · funding
+Per markt	Per market
+Long tegen short	Long against short
+Per dagdeel (sluittijd)	Per part of the day (closing time)
+Kalender: resultaat per dag	Calendar: result per day
+Toon deze trade in de chart	Show this trade in the chart
 Een stop-entry aan die kant van de koers gaat direct af. Hij staat terug.	A stop entry on that side of the price goes off at once. It is back where it was.
 Stop-entry	Stop entry
 concept	draft

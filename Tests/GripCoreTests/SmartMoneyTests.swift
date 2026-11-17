@@ -35,3 +35,27 @@ final class SmartMoneyTests: XCTestCase {
         XCTAssertEqual(r.orderBlocks.first, SMCResult.Zone(start: 4, top: 12.5, bottom: 11, isBullish: true, end: nil))
     }
 }
+
+final class TradeStatsTests: XCTestCase {
+    private func trade(_ coin: String, long: Bool, pnl: Double, hour: Int, r: Double? = nil) -> ClosedTrade {
+        let close = Date(timeIntervalSince1970: 1_700_000_000 + Double(hour) * 3600)
+        return ClosedTrade(id: "\(coin)-\(hour)", coin: coin, isLong: long, openTime: close.addingTimeInterval(-600), closeTime: close,
+                           size: 1, avgEntry: 100, avgExit: 100 + pnl, grossPnl: pnl, fees: 0, fills: 2, rMultiple: r)
+    }
+
+    func testKeyFigures() {
+        // +100, −50, +30, −40 in this order: tops at 100, falls to 50 (drawdown 50), 80, then 40 (drawdown 60).
+        let s = TradeStats.compute([trade("BTC", long: true, pnl: 100, hour: 0, r: 2), trade("ETH", long: false, pnl: -50, hour: 1, r: -1),
+                                    trade("BTC", long: true, pnl: 30, hour: 2), trade("ETH", long: true, pnl: -40, hour: 3)])
+        XCTAssertEqual(s.count, 4)
+        XCTAssertEqual(s.winRate, 0.5, accuracy: 1e-9)
+        XCTAssertEqual(s.net, 40, accuracy: 1e-9)
+        XCTAssertEqual(s.profitFactor ?? 0, 130.0 / 90.0, accuracy: 1e-9)
+        XCTAssertEqual(s.maxDrawdown, 60, accuracy: 1e-9)
+        XCTAssertEqual(s.avgWinR, 2)
+        XCTAssertEqual(s.avgLossR, -1)
+        XCTAssertEqual(s.byCoin.first?.name, "BTC")
+        XCTAssertEqual(s.byCoin.first?.net ?? 0, 130, accuracy: 1e-9)
+        XCTAssertEqual(s.bySide.map(\.count), [3, 1])
+    }
+}
